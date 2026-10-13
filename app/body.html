@@ -1,0 +1,150 @@
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><g stroke="currentColor" stroke-width="1.2"><line x1="2" y1="4" x2="20" y2="4"/><line x1="2" y1="7.5" x2="20" y2="7.5"/><line x1="2" y1="11" x2="20" y2="11"/><line x1="2" y1="14.5" x2="20" y2="14.5"/><line x1="2" y1="18" x2="20" y2="18"/></g><rect x="8" y="1.5" width="3.2" height="19" rx="1.2" fill="var(--accent)"/></svg>
+      <span>Guitar Tab</span>
+    </div>
+    <div class="spacer"></div>
+    <button class="linkbtn" id="navNew" type="button" hidden>New song</button>
+    <button class="linkbtn" id="navLibrary" type="button">Saved tabs</button>
+  </header>
+
+  <!-- START -->
+  <section class="screen" id="screenStart">
+    <div class="drop" id="drop">
+      <h1>Turn a song into guitar tab</h1>
+      <p>Pick any audio or video file. The app pulls the guitar out of the mix, works out the tuning and where the capo is, and writes the tab. Everything runs on this device; nothing is uploaded.</p>
+      <div class="picked" id="picked" hidden>
+        <strong id="pickedName"></strong><span class="muted small" id="pickedInfo"></span>
+      </div>
+      <div class="range-row">
+        <label class="btn" for="fileInput">Choose a file</label>
+        <input id="fileInput" type="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.mp4,.mov,.webm" hidden>
+        <button class="btn primary" id="startBtn" type="button" disabled>Make the tab</button>
+      </div>
+      <p class="small error" id="startError" hidden></p>
+    </div>
+
+    <div class="settings" id="settings">
+      <div class="setting">
+        <span class="lbl">What's in the file</span>
+        <div class="seg" role="group" aria-label="What's in the file">
+          <button type="button" data-opt="isolate" data-val="guitar" aria-pressed="true">Full song</button>
+          <button type="button" data-opt="isolate" data-val="guitar+other" aria-pressed="false">Full song, wider net</button>
+          <button type="button" data-opt="isolate" data-val="off" aria-pressed="false">Just guitar</button>
+        </div>
+        <div class="help">"Wider net" also keeps sounds the separator files under "other". Try it if clean, twinkly guitars come out thin.</div>
+      </div>
+      <div class="setting">
+        <label for="optSplit">Two guitars panned left/right</label>
+        <select id="optSplit">
+          <option value="auto">Separate them when I can</option>
+          <option value="off">Treat as one guitar</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label for="optTuning">Tuning</label>
+        <select id="optTuning"></select>
+        <div class="tuning-custom" id="customTuning" hidden></div>
+        <div class="help">Leave on auto unless you know it. You can still change it after.</div>
+      </div>
+      <div class="setting">
+        <span class="lbl">Tunings you use</span>
+        <div class="tuning-custom" id="favAdd"></div>
+        <div class="chips" id="favList" style="grid-column:1/-1"></div>
+        <div class="help">Tunings listed here get picked more readily when a song could be played several ways.</div>
+      </div>
+      <div class="setting">
+        <label for="optCapo">Capo</label>
+        <select id="optCapo"></select>
+      </div>
+      <div class="setting">
+        <label class="lbl" for="rangeFrom">Part of the song</label>
+        <div class="range-row">
+          <input id="rangeFrom" type="text" inputmode="numeric" placeholder="0:00" size="5" aria-label="From">
+          <span class="muted">to</span>
+          <input id="rangeTo" type="text" inputmode="numeric" placeholder="end" size="5" aria-label="To">
+        </div>
+        <div class="help">Shorter sections finish faster. Leave blank for the whole song.</div>
+      </div>
+      <div class="setting">
+        <label for="optQuality">Speed</label>
+        <select id="optQuality">
+          <option value="best">Best quality</option>
+          <option value="fast">Faster</option>
+        </select>
+        <div class="help" id="engineInfo"></div>
+      </div>
+    </div>
+
+    <div class="section-title" id="libTitle">Saved tabs</div>
+    <div class="library" id="library"><div class="empty">Tabs you make are saved here on this device.</div></div>
+  </section>
+
+  <!-- WORKING -->
+  <section class="screen" id="screenWork" hidden>
+    <div class="working">
+      <h2 id="workTitle">Working on it</h2>
+      <div class="bar" aria-hidden="true"><i id="workBar"></i></div>
+      <div class="small muted" id="workStatus">Starting</div>
+      <ol class="steps" id="workSteps">
+        <li data-step="load">Load the models</li>
+        <li data-step="separate">Pull the guitar out of the mix</li>
+        <li data-step="rhythm">Find the beat</li>
+        <li data-step="split">Check for a second guitar</li>
+        <li data-step="notes">Hear the notes</li>
+        <li data-step="setup">Work out tuning and capo</li>
+        <li data-step="tab">Write the tab</li>
+      </ol>
+      <p class="small muted" id="workNote">Keep this screen open. On a phone, locking the screen or switching apps pauses the work.</p>
+      <div><button class="btn" id="cancelBtn" type="button">Cancel</button></div>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section class="screen" id="screenResult" hidden>
+    <div class="song-head">
+      <h1 id="songTitle"></h1>
+      <div class="facts" id="facts"></div>
+    </div>
+    <div class="setup" id="setupBox"></div>
+    <div class="toolbar">
+      <div class="seg" id="partSeg" role="group" aria-label="Guitar part"></div>
+      <div class="seg" role="group" aria-label="View">
+        <button type="button" id="viewTab" aria-pressed="true">Tab</button>
+        <button type="button" id="viewText" aria-pressed="false">Text</button>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn quiet" id="undoBtn" type="button" disabled>Undo</button>
+      <button class="btn" id="exportBtn" type="button">Save / export</button>
+    </div>
+    <p class="note-line" id="editHint">Tap a note to move it to another string, change it, or delete it.</p>
+    <div class="tabwrap">
+      <div id="tab"></div>
+      <pre class="ascii" id="ascii" hidden></pre>
+    </div>
+  </section>
+</div>
+
+<div class="player" id="player" hidden>
+  <div class="player-inner">
+    <button class="btn primary iconbtn" id="playBtn" type="button" aria-label="Play">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" id="playIcon"><path d="M4 2.5v13l11-6.5z" fill="currentColor"/></svg>
+    </button>
+    <select id="srcSel" aria-label="What to hear">
+      <option value="mix">Recording</option>
+      <option value="guitar">Guitar only</option>
+      <option value="synth">Tab (synth)</option>
+    </select>
+    <select id="speedSel" aria-label="Speed">
+      <option value="0.5">50%</option>
+      <option value="0.6">60%</option>
+      <option value="0.75">75%</option>
+      <option value="0.9">90%</option>
+      <option value="1" selected>100%</option>
+    </select>
+    <button class="btn quiet" id="loopBtn" type="button" aria-pressed="false">Loop</button>
+    <div class="grow"><input type="range" id="seek" min="0" max="1000" value="0" aria-label="Position"></div>
+    <span class="time" id="timeLbl">0:00</span>
+  </div>
+</div>

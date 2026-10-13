@@ -1,0 +1,19 @@
+{
+  "name": "Guitar Tab",
+  "short_name": "Guitar Tab",
+  "description": "Turn any song into guitar tab: isolates the guitar, works out tuning and capo, writes the tab.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f6f9",
+  "theme_color": "#2c5fb3",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "file_handlers": [
+    { "action": "./", "accept": { "audio/*": [".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac"], "video/*": [".mp4", ".mov", ".webm"] } }
+  ]
+}

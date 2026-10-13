@@ -1,0 +1,8 @@
+{
+  "name": "guitar-tab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Turn any song into guitar tab: isolates the guitar, detects tuning and capo, and writes the tab. Runs in the browser on Windows and iPhone.",
+  "license": "MIT"
+}

@@ -1,0 +1,41 @@
+{
+ "version": "fd1b3468ee",
+ "ort": {
+  "wasm": "vendor/ort/ort.wasm.bundle.min.mjs",
+  "webgpu": "vendor/ort/ort.webgpu.bundle.min.mjs"
+ },
+ "assets": {
+  "ortWasm": {
+   "size": 14239897,
+   "sha": "3398c10d07",
+   "parts": [
+    "assets/ort-wasm-3398c10d07.0.bin"
+   ]
+  },
+  "ortWasmGpu": {
+   "size": 26781914,
+   "sha": "39f9f0894d",
+   "parts": [
+    "assets/ort-wasm-gpu-39f9f0894d.0.bin",
+    "assets/ort-wasm-gpu-39f9f0894d.1.bin"
+   ]
+  },
+  "demucs": {
+   "size": 58348084,
+   "sha": "d9be6b16ca",
+   "parts": [
+    "assets/demucs-6s-d9be6b16ca.0.bin",
+    "assets/demucs-6s-d9be6b16ca.1.bin",
+    "assets/demucs-6s-d9be6b16ca.2.bin",
+    "assets/demucs-6s-d9be6b16ca.3.bin"
+   ]
+  },
+  "basicpitch": {
+   "size": 230444,
+   "sha": "2c3c1d144b",
+   "parts": [
+    "assets/basic-pitch-2c3c1d144b.0.bin"
+   ]
+  }
+ }
+}
