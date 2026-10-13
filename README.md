@@ -10,7 +10,7 @@ Turn any song into guitar tab. Drop in an audio or video file and the app:
 
 Everything runs on your own device, in the browser. Nothing is uploaded anywhere.
 
-**Open it:** https://guitar-tab.onrender.com/ (hosted on Render from this repo; every push to `main` redeploys it)
+**Open it:** https://guitar-tab.onrender.com/ (a free Render static site built from this repo's `main` branch; after pushing changes, press *Manual Deploy* in the Render dashboard, or connect the repo through Render's GitHub app so pushes deploy automatically)
 
 ## Install it like an app
 
