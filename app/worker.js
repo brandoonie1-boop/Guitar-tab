@@ -1,70 +1,33 @@
 // Processing worker: loads the models and runs the transcription pipeline off the main thread.
 import { transcribe } from '../engine/pipeline.js';
 
-const BASE = new URL('../', import.meta.url).href;
+import { fetchAsset, getManifest, baseUrl } from './assets.js';
+
+const BASE = baseUrl();
 let ort = null;
 let ortKind = null;
 let demucs = null, basicPitch = null;
 let cancelled = false;
-let manifest = null;
 
 function post(type, data, transfer) { self.postMessage({ type, ...data }, transfer || []); }
 
-async function getManifest() {
-  if (manifest) return manifest;
-  const r = await fetch(BASE + 'assets.json');
-  manifest = await r.json();
-  return manifest;
-}
-
-// fetch one asset (possibly split into chunks), with optional Cache Storage caching
-async function fetchAsset(key, onProgress) {
-  const m = await getManifest();
-  const a = m.assets[key];
-  if (!a) throw new Error('missing asset ' + key);
-  const urls = a.parts.map((p) => BASE + p);
-  let cache = null;
-  try { cache = self.caches ? await caches.open('guitar-tab-assets-' + m.version) : null; } catch { cache = null; }
-  const total = a.size;
-  let loaded = 0;
-  const chunks = [];
-  for (const u of urls) {
-    let resp = null;
-    if (cache) { try { resp = await cache.match(u); } catch { resp = null; } }
-    let buf;
-    if (resp) {
-      buf = new Uint8Array(await resp.arrayBuffer());
-      loaded += buf.length;
-      if (onProgress) onProgress(loaded / total);
-    } else {
-      const r = await fetch(u);
-      if (!r.ok) throw new Error(`Could not download ${key} (${r.status})`);
-      const reader = r.body ? r.body.getReader() : null;
-      if (reader) {
-        const parts = [];
-        let n = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          parts.push(value); n += value.length; loaded += value.length;
-          if (onProgress) onProgress(Math.min(1, loaded / total));
-        }
-        buf = new Uint8Array(n);
-        let o = 0;
-        for (const p of parts) { buf.set(p, o); o += p.length; }
-      } else {
-        buf = new Uint8Array(await r.arrayBuffer());
-        loaded += buf.length;
-      }
-      if (cache) { try { await cache.put(u, new Response(buf.slice(0))); } catch { /* storage full or blocked */ } }
-    }
-    chunks.push(buf);
-  }
-  if (chunks.length === 1) return chunks[0];
-  const out = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0));
-  let o = 0;
-  for (const c of chunks) { out.set(c, o); o += c.length; }
-  return out;
+// A real graphics chip, not a software emulation (which would be far slower than the processor).
+let gpuCheck = null;
+function hardwareGpu() {
+  if (gpuCheck) return gpuCheck;
+  gpuCheck = (async () => {
+    try {
+      if (!self.navigator.gpu) return false;
+      const adapter = await self.navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+      if (!adapter) return false;
+      const info = adapter.info || (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : {}) || {};
+      if (adapter.isFallbackAdapter || info.isFallbackAdapter) return false;
+      const desc = `${info.vendor || ''} ${info.architecture || ''} ${info.device || ''} ${info.description || ''}`.toLowerCase();
+      if (/swiftshader|llvmpipe|lavapipe|software|microsoft basic render|warp/.test(desc)) return false;
+      return true;
+    } catch { return false; }
+  })();
+  return gpuCheck;
 }
 
 let threadLimit = 8;
@@ -86,7 +49,7 @@ async function loadOrt(useGpu) {
 
 async function createSession(bytes, useGpu) {
   const opts = { graphOptimizationLevel: 'all' };
-  if (useGpu) opts.executionProviders = ['webgpu', 'wasm'];
+  if (useGpu) opts.executionProviders = ['webgpu'];
   else opts.executionProviders = ['wasm'];
   return ort.InferenceSession.create(bytes, opts);
 }
@@ -99,7 +62,8 @@ self.onmessage = async (e) => {
   if (msg.opts.threads) threadLimit = msg.opts.threads;
   const t0 = performance.now();
   try {
-    const wantGpu = !!msg.opts.gpu && !!self.navigator.gpu;
+    const mf = await getManifest();
+    const wantGpu = !!msg.opts.gpu && !!mf.ort.webgpu && !!mf.assets.ortWasmGpu && (await hardwareGpu());
     let useGpu = wantGpu;
     try {
       await loadOrt(useGpu);
@@ -108,24 +72,42 @@ self.onmessage = async (e) => {
       useGpu = false;
       await loadOrt(false);
     }
+    let demucsBytes = null;
     const env = {
       ort,
       cancelled: () => cancelled,
       progress: (p) => post('progress', p),
-      getDemucs: async (onProg) => {
+      checkSeparation: useGpu,
+      getDemucs: async () => {
         if (demucs) return demucs;
-        const bytes = await fetchAsset('demucs', (f) => post('progress', { stage: 'load', frac: 0.3 + 0.7 * f, label: 'Downloading the guitar isolation model (once)' }));
+        demucsBytes = await fetchAsset('demucs', (f) => post('progress', { stage: 'load', frac: 0.3 + 0.7 * f, label: 'Downloading the guitar isolation model (once)' }));
         try {
-          demucs = await createSession(bytes, useGpu);
+          demucs = await createSession(demucsBytes, useGpu);
         } catch (err) {
           if (!useGpu) throw err;
-          // GPU path failed: fall back to CPU
+          console.warn('GPU session failed, using the processor', err);
+          post('gpu', { ok: false, reason: String(err && err.message || err) });
           useGpu = false;
+          env.checkSeparation = false;
           await loadOrt(false);
           env.ort = ort;
-          demucs = await createSession(bytes, false);
+          demucs = await createSession(demucsBytes, false);
         }
         return demucs;
+      },
+      fallbackToCpu: async (err) => {
+        if (!useGpu) throw err;
+        console.warn('GPU separation failed, using the processor', err);
+        post('gpu', { ok: false, reason: String(err && err.message || err) });
+        useGpu = false;
+        env.checkSeparation = false;
+        try { if (demucs && demucs.release) await demucs.release(); } catch { /* ignore */ }
+        demucs = null; basicPitch = null;
+        await loadOrt(false);
+        env.ort = ort;
+        if (!demucsBytes) demucsBytes = await fetchAsset('demucs');
+        demucs = await createSession(demucsBytes, false);
+        return { ort, session: demucs };
       },
       getBasicPitch: async () => {
         if (basicPitch) return basicPitch;

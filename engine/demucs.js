@@ -171,6 +171,12 @@ export async function separate(ort, session, left, right, opts = {}) {
     const res = await session.run(feeds);
     const spec = res.spec.data; // [1, 6, 4, BINS, FR]
     const wave = res.wave.data; // [1, 6, 2, SEG]
+    if (opts.check && ci === 0) {
+      // sanity check (used for the GPU path): the six sources should add back up to the mix
+      const snr = reconstructionSnr(spec, wave, mixL, mixR, chunkLen, delta);
+      if (opts.onCheck) opts.onCheck(snr);
+      if (!(snr > (opts.minCheckSnr ?? 8))) throw new Error('separation-check-failed');
+    }
     const weight = weightFull; // indexed from 0 for the chunk (chunkLen <= SEG)
     for (const [name, mode] of Object.entries(keep)) {
       const s = srcIndex[name];
@@ -194,6 +200,33 @@ export async function separate(ort, session, left, right, opts = {}) {
     }
   }
   return out;
+}
+
+function reconstructionSnr(spec, wave, mixL, mixR, chunkLen, delta) {
+  const S = DEMUCS.sources.length;
+  const n = BINS * FR;
+  const sumL = new Float32Array(SEG), sumR = new Float32Array(SEG);
+  const accRe = new Float32Array(n), accIm = new Float32Array(n);
+  for (const [ch, out] of [[0, sumL], [1, sumR]]) {
+    accRe.fill(0); accIm.fill(0);
+    for (let s = 0; s < S; s++) {
+      const base = s * 4 * n;
+      const re = spec.subarray(base + (2 * ch) * n, base + (2 * ch + 1) * n);
+      const im = spec.subarray(base + (2 * ch + 1) * n, base + (2 * ch + 2) * n);
+      for (let i = 0; i < n; i++) { accRe[i] += re[i]; accIm[i] += im[i]; }
+      const w = wave.subarray((s * 2 + ch) * SEG, (s * 2 + ch + 1) * SEG);
+      for (let i = 0; i < SEG; i++) out[i] += w[i];
+    }
+    ispecAdd(accRe, accIm, 0, 0, out);
+  }
+  const d0 = delta >> 1;
+  let e = 0, r = 0;
+  for (let i = d0; i < d0 + chunkLen; i++) {
+    r += mixL[i] * mixL[i] + mixR[i] * mixR[i];
+    e += (mixL[i] - sumL[i]) ** 2 + (mixR[i] - sumR[i]) ** 2;
+  }
+  if (r < 1e-9) return 99; // silence: nothing to check
+  return 10 * Math.log10(r / Math.max(1e-12, e));
 }
 
 // Exposed for tests

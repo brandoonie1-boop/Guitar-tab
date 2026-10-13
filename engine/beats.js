@@ -190,7 +190,8 @@ function strengthAt(env, fps, times) {
 /** Full analysis: tempo, beats, meter, downbeats. */
 export function analyzeRhythm(mono, sr, opts = {}) {
   const oe = onsetEnvelope(mono, sr);
-  const tempo = estimateTempo(oe.env, oe.fps, { startBpm: opts.startBpm || 110 });
+  // tempo prior tuned on GuitarSet (tests/eval_tempo.mjs): 130 BPM, 0.6 octave spread
+  const tempo = estimateTempo(oe.env, oe.fps, { startBpm: opts.startBpm || 130, stdOct: opts.stdOct || 0.6 });
   let bpm = opts.bpm || tempo.bpm;
   let beats = trackBeats(oe.env, oe.fps, bpm);
   // half-tempo check: if the off-beats are nearly as strong as the beats, the real pulse is twice as fast

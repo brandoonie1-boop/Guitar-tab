@@ -55,11 +55,27 @@ const caps = {
   gpu: !!navigator.gpu,
 };
 
+const APP_URL = 'https://guitar-tab.onrender.com/';
+function gpuPref() {
+  try { return localStorage.getItem('gt-gpu') || 'on'; } catch { return 'on'; }
+}
+function setupGpuRow() {
+  // the GPU path needs WebGPU; if it fails or gives bad output the app falls back to the processor
+  if (!navigator.gpu) return;
+  $('gpuRow').hidden = false;
+  $('engineRow').hidden = true;
+  $('optGpu').value = gpuPref();
+  $('optGpu').addEventListener('change', () => { try { localStorage.setItem('gt-gpu', $('optGpu').value); } catch { /* ignore */ } });
+}
 function engineInfo() {
+  const box = $('gpuRow').hidden ? $('engineInfo2') : $('engineInfo');
   const t = caps.threads > 1 ? `${caps.threads} processor threads` : 'one processor thread';
-  const msg = `Runs on this device using ${t}.` + (caps.threads === 1 && !ARTIFACT ? ' Reload once after the first visit to unlock more threads.' : '')
-    + (ARTIFACT ? ' The installed web app version is faster.' : '');
-  $('engineInfo').textContent = msg;
+  box.textContent = `Runs on this device using ${t}.` + (caps.threads === 1 && !ARTIFACT ? ' Reload once after the first visit to unlock more threads.' : '');
+  if (ARTIFACT) {
+    box.append(' For faster processing and offline use, open the installable version: ');
+    const a = el('a', { href: APP_URL, target: '_blank', rel: 'noopener', text: 'guitar-tab.onrender.com' });
+    box.append(a, '.');
+  }
 }
 
 if (!ARTIFACT && 'serviceWorker' in navigator && location.protocol !== 'file:') {
@@ -239,12 +255,17 @@ async function start(retry = false) {
     threads: retry ? 1 : 8,
     isolate: opts.isolate, split: opts.split, tuning: opts.tuning, capo: opts.capo, range: opts.range,
     overlap: opts.quality === 'fast' ? 0.1 : 0.25,
-    gpu: false,
+    gpu: !$('gpuRow').hidden && $('optGpu').value === 'on',
     preferTunings: favoriteTunings(),
   };
   w.onmessage = async (e) => {
     const m = e.data;
     if (m.type === 'progress') onProgress(m);
+    else if (m.type === 'gpu' && !m.ok) {
+      // remember that the graphics chip didn't work here, so next time goes straight to the processor
+      try { localStorage.setItem('gt-gpu', 'off'); } catch { /* ignore */ }
+      $('optGpu').value = 'off';
+    }
     else if (m.type === 'error') {
       if (m.message !== 'cancelled' && !state.retrying && caps.threads > 1) { workerFailed(m.message); return; }
       keepAwake(false);
@@ -330,6 +351,7 @@ function restoreTech(result) {
 }
 
 async function finish(m, mixBlob, opts) {
+  console.info(`processed with ${m.backend} in ${(m.ms / 1000).toFixed(1)} s`);
   const result = m.result;
   restoreTech(result);
   const id = `p${Date.now().toString(36)}`;
@@ -401,8 +423,8 @@ let tabviewPromise = null;
 async function getTabView() {
   if (state.tabview) return state.tabview;
   if (!tabviewPromise) {
-    tabviewPromise = import('./tabview.js').then(({ TabView }) => {
-      state.tabview = new TabView($('tab'), {
+    tabviewPromise = import('./tabview.js').then(async ({ TabView }) => {
+      const tv = new TabView($('tab'), {
         onNoteClick: (id) => openSheet(id),
         onPlayState: (playing) => setPlayIcon(playing),
         onTime: (t, d) => {
@@ -410,7 +432,9 @@ async function getTabView() {
           if (!seeking && d > 0) $('seek').value = String(Math.round((1000 * t) / d));
         },
       });
-      return state.tabview;
+      await tv.init();
+      state.tabview = tv;
+      return tv;
     });
   }
   return tabviewPromise;
@@ -869,6 +893,7 @@ function toast(msg) {
 }
 
 fillSelects();
+setupGpuRow();
 fillFavAdd();
 renderFavorites();
 engineInfo();

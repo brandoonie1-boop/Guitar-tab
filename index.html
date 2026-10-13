@@ -304,7 +304,17 @@ button.fact:hover { border-color: var(--accent); }
           <option value="best">Best quality</option>
           <option value="fast">Faster</option>
         </select>
+      </div>
+      <div class="setting" id="gpuRow" hidden>
+        <label for="optGpu">Use the graphics chip</label>
+        <select id="optGpu">
+          <option value="on">Yes, it's much faster</option>
+          <option value="off">No, processor only</option>
+        </select>
         <div class="help" id="engineInfo"></div>
+      </div>
+      <div class="setting" id="engineRow">
+        <div class="help" id="engineInfo2"></div>
       </div>
     </div>
 
@@ -380,6 +390,6 @@ button.fact:hover { border-color: var(--accent); }
   </div>
 </div>
 
-<script type="module" src="app/main.js?v=990d35b891"></script>
+<script type="module" src="app/main.js?v=8ba1bc9068"></script>
 </body>
 </html>

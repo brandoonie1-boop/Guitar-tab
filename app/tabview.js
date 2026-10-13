@@ -1,7 +1,17 @@
 // alphaTab wrapper: renders the tab, follows the recording with a cursor, plays the tab.
 import * as alphaTab from '../vendor/alphatab/alphaTab.mjs';
+import { fetchAsset, hasAsset } from './assets.js';
 
 const BASE = new URL('../', import.meta.url).href;
+
+// Where the synth's soundfont comes from: a plain file, or (in the artifact build) a packed asset.
+let soundFontBytes = null;
+async function packedSoundFont() {
+  if (soundFontBytes) return soundFontBytes;
+  if (!(await hasAsset('soundfont'))) return null;
+  soundFontBytes = fetchAsset('soundfont');
+  return soundFontBytes;
+}
 
 export class TabView {
   constructor(el, { onNoteClick, onPlayState, onTime } = {}) {
@@ -43,11 +53,15 @@ export class TabView {
     s.player.enableCursor = true;
     s.player.enableUserInteraction = true;
     s.player.enableAnimatedBeatCursor = true;
-    s.player.soundFont = BASE + 'vendor/alphatab/soundfont/sonivox.sf3';
+    s.player.soundFont = this.packedSoundFont ? null : BASE + 'vendor/alphatab/soundfont/sonivox.sf3';
     s.player.playerMode = mode === 'synth' ? alphaTab.PlayerMode.EnabledSynthesizer : alphaTab.PlayerMode.EnabledExternalMedia;
     s.player.scrollMode = alphaTab.ScrollMode.Continuous;
     s.player.scrollOffsetY = -120;
     return s;
+  }
+
+  async init() {
+    try { this.packedSoundFont = await packedSoundFont(); } catch { this.packedSoundFont = null; }
   }
 
   _create(mode) {
@@ -55,6 +69,9 @@ export class TabView {
     const api = new alphaTab.AlphaTabApi(this.el, this._settings(mode));
     this.api = api;
     this.apiMode = mode;
+    if (mode === 'synth' && this.packedSoundFont) {
+      Promise.resolve(this.packedSoundFont).then((b) => { if (this.api === api) api.loadSoundFont(b, false); }).catch((e) => console.warn('soundfont', e));
+    }
     api.noteMouseDown.on((note) => this._noteClicked(note));
     api.playerStateChanged.on((e) => { if (this.onPlayState) this.onPlayState(e.state === 1); });
     api.playerPositionChanged.on((e) => { if (this.mode === 'synth' && this.onTime) this.onTime(e.currentTime / 1000, e.endTime / 1000); });

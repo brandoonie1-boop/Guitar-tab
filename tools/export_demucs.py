@@ -15,6 +15,37 @@ from demucs.htdemucs import HTDemucs
 
 torch.set_grad_enabled(False)
 torch.backends.mha.set_fastpath_enabled(False)
+
+ATTN_CHUNK = 448  # queries per attention block: same result, ~6x less peak memory
+
+
+def chunked_mha_forward(self, query, key, value, key_padding_mask=None, need_weights=True,
+                        attn_mask=None, average_attn_weights=True, is_causal=False):
+    """Multi-head attention computed in query chunks (exact; lower peak memory in ONNX Runtime)."""
+    assert attn_mask is None and key_padding_mask is None and self._qkv_same_embed_dim
+    if self.batch_first:
+        q, k, v = query, key, value
+    else:
+        q, k, v = query.transpose(0, 1), key.transpose(0, 1), value.transpose(0, 1)
+    B, Lq, E = q.shape
+    Lk = k.shape[1]
+    H = self.num_heads
+    D = E // H
+    w_q, w_k, w_v = self.in_proj_weight.chunk(3)
+    b_q, b_k, b_v = self.in_proj_bias.chunk(3)
+    Q = torch.nn.functional.linear(q, w_q, b_q).view(B, Lq, H, D).transpose(1, 2) * (D ** -0.5)
+    K = torch.nn.functional.linear(k, w_k, b_k).view(B, Lk, H, D).transpose(1, 2)
+    V = torch.nn.functional.linear(v, w_v, b_v).view(B, Lk, H, D).transpose(1, 2)
+    Kt = K.transpose(-2, -1)
+    outs = []
+    for s0 in range(0, Lq, ATTN_CHUNK):
+        a = torch.softmax(torch.matmul(Q[:, :, s0:s0 + ATTN_CHUNK], Kt), dim=-1)
+        outs.append(torch.matmul(a, V))
+    O = torch.cat(outs, dim=2).transpose(1, 2).reshape(B, Lq, E)
+    O = torch.nn.functional.linear(O, self.out_proj.weight, self.out_proj.bias)
+    if not self.batch_first:
+        O = O.transpose(0, 1)
+    return O, None
 meta = json.load(open('models/5c90dfd2.json')) if False else None
 
 
@@ -168,9 +199,14 @@ if __name__ == '__main__':
     err = np.abs(out - ref).max()
     print('numpy-STFT + core vs torch full: max abs err', err, 'ref max', np.abs(ref).max())
 
+    if '--chunked' in sys.argv:
+        torch.nn.MultiheadAttention.forward = chunked_mha_forward
+        spec2, wave2 = core(mag, mix)
+        out2 = np_ispec(uncac(spec2[0].numpy().astype(np.float64), 6, 2), L) + wave2[0].numpy()
+        print('chunked attention vs torch full: max abs err', np.abs(out2 - ref).max())
     if '--export' in sys.argv:
         t0 = time.time()
-        torch.onnx.export(core, (mag, mix), 'models/htdemucs_6s_core.onnx', opset_version=17,
+        torch.onnx.export(core, (mag, mix), sys.argv[sys.argv.index('--out') + 1] if '--out' in sys.argv else 'models/htdemucs_6s_core.onnx', opset_version=17,
                           input_names=['mag', 'mix'], output_names=['spec', 'wave'], dynamo=False,
                           do_constant_folding=True)
         print('exported in', time.time() - t0)

@@ -11,7 +11,7 @@ const browser = await bt.launch({ args: browserName === 'chromium' ? ['--enable-
 const ctx = await browser.newContext(mobile ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: browserName !== 'webkit' ? true : undefined, hasTouch: true } : { viewport: { width: 1280, height: 900 } });
 const page = await ctx.newPage();
 const logs = [];
-page.on('console', (m) => { const t = `[${m.type()}] ${m.text()}`; logs.push(t); if (m.type() === 'error' || m.type() === 'warning') console.log(t.slice(0, 300)); });
+page.on('console', (m) => { const t = `[${m.type()}] ${m.text()}`; logs.push(t); if (m.type() === 'error' || m.type() === 'warning' || /processed with|GPU/.test(m.text())) console.log(t.slice(0, 300)); });
 page.on('pageerror', (e) => console.log('PAGEERROR', e.message));
 const t0 = Date.now();
 const el = (s) => ((Date.now() - t0) / 1000).toFixed(1) + 's ' + s;
@@ -20,7 +20,7 @@ await page.waitForTimeout(1500);
 // service worker reload for isolation
 await page.waitForLoadState('load');
 await page.waitForTimeout(1500);
-console.log(el('isolated: ' + await page.evaluate(() => self.crossOriginIsolated)), 'threads info:', await page.textContent('#engineInfo'));
+console.log(el('isolated: ' + await page.evaluate(() => self.crossOriginIsolated)), 'gpu row visible:', await page.evaluate(() => !document.getElementById('gpuRow').hidden), 'navigator.gpu:', await page.evaluate(() => !!navigator.gpu));
 await page.screenshot({ path: `${shots}/${browserName}${mobile ? '-m' : ''}-1-start.png`, fullPage: true });
 await page.setInputFiles('#fileInput', file);
 await page.waitForFunction(() => !document.getElementById('startBtn').disabled, null, { timeout: 60000 });

@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8"><title>gpu mini</title>
+<pre id="out">running</pre>
+<script type="module">
+// Runs a short-input export of the Demucs core on WebGPU (and WASM) and compares with PyTorch outputs.
+const out = document.getElementById('out');
+const T0 = performance.now();
+const log = (s) => { const l = `[${((performance.now() - T0) / 1000).toFixed(1)}s] ${s}`; out.textContent += '\n' + l; console.log(l); };
+const f32 = async (p) => new Float32Array(await (await fetch(p)).arrayBuffer());
+async function wasmBinary(key) {
+  const manifest = await (await fetch('../assets.json')).json();
+  const parts = await Promise.all(manifest.assets[key].parts.map((p) => fetch('../' + p).then((r) => r.arrayBuffer())));
+  const tot = parts.reduce((s, p) => s + p.byteLength, 0); const wb = new Uint8Array(tot); let o = 0;
+  for (const p of parts) { wb.set(new Uint8Array(p), o); o += p.byteLength; }
+  return wb;
+}
+function snr(a, ref) { let e = 0, r = 0; for (let i = 0; i < ref.length; i++) { e += (a[i] - ref[i]) ** 2; r += ref[i] ** 2; } return 10 * Math.log10(r / e); }
+try {
+  const eps = (new URLSearchParams(location.search).get('eps') || 'webgpu').split(',');
+  const mag = await f32('../testdata/mini_mag.f32'), mix = await f32('../testdata/mini_mix.f32');
+  const refSpec = await f32('../testdata/mini_spec.f32'), refWave = await f32('../testdata/mini_wave.f32');
+  for (const ep of eps) {
+    const mod = await import(ep === 'webgpu' ? '../vendor/ort/ort.webgpu.bundle.min.mjs' : '../vendor/ort/ort.wasm.bundle.min.mjs');
+    const ort = mod.default && mod.default.InferenceSession ? mod.default : mod;
+    ort.env.wasm.wasmBinary = await wasmBinary(ep === 'webgpu' ? 'ortWasmGpu' : 'ortWasm');
+    ort.env.wasm.numThreads = 1;
+    const bytes = new Uint8Array(await (await fetch('../testdata/mini.f16.onnx')).arrayBuffer());
+    const s = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
+    log(`${ep}: session ready`);
+    const t = performance.now();
+    const r = await s.run({ mag: new ort.Tensor('float32', mag, [1, 4, 2048, 84]), mix: new ort.Tensor('float32', mix, [1, 2, 85995]) });
+    log(`${ep}: run ${(performance.now() - t).toFixed(0)} ms`);
+    log(`${ep}: spec SNR vs torch ${snr(r.spec.data, refSpec).toFixed(1)} dB, wave SNR ${snr(r.wave.data, refWave).toFixed(1)} dB`);
+  }
+} catch (e) { log('ERROR ' + (e && e.stack || e)); }
+log('DONE');
+</script>

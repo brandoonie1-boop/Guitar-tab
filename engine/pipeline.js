@@ -95,12 +95,23 @@ export async function transcribe(audio, userOpts = {}, env) {
     progress('separate', 0, 'Isolating the guitar');
     const session = await env.getDemucs((f) => progress('separate', 0.02 * f, 'Loading the separation model'));
     const keep = { guitar: 'stereo', drums: 'mono', other: 'stereo' };
-    const st = await separate(env.ort, session, left, right, {
+    const sepOpts = {
       keep,
       overlap: opts.overlap,
       onProgress: (f) => progress('separate', 0.02 + 0.98 * f, 'Isolating the guitar'),
       shouldCancel: cancelled,
-    });
+      check: !!env.checkSeparation,
+    };
+    let st;
+    try {
+      st = await separate(env.ort, session, left, right, sepOpts);
+    } catch (err) {
+      // the fast (GPU) path failed or produced bad output: redo it on the processor
+      if (!env.fallbackToCpu || (err && err.message === 'cancelled')) throw err;
+      progress('separate', 0, 'Switching to the processor');
+      const cpu = await env.fallbackToCpu(err);
+      st = await separate(cpu.ort, cpu.session, left, right, { ...sepOpts, check: false });
+    }
     gL = st.guitar[0]; gR = st.guitar[1];
     drums = st.drums[0];
     other = st.other;

@@ -16,7 +16,7 @@ function readF32(p) {
 const inp = readF32(path.join(dir, 'sep_in.f32'));
 const n = inp.length / 2;
 const left = inp.slice(0, n), right = inp.slice(n);
-const opts = runtime === 'web' ? { executionProviders: ['wasm'] } : { intraOpNumThreads: 2 };
+const opts = runtime === 'web' ? { executionProviders: ['wasm'], ...(process.env.SESS ? JSON.parse(process.env.SESS) : {}) } : { intraOpNumThreads: 2 };
 if (runtime === 'web') { ort.env.wasm.numThreads = Number(process.env.THREADS || 1); }
 let t0 = Date.now();
 const session = await ort.InferenceSession.create(fs.readFileSync(onnxPath), opts);

@@ -10,7 +10,7 @@ Turn any song into guitar tab. Drop in an audio or video file and the app:
 
 Everything runs on your own device, in the browser. Nothing is uploaded anywhere.
 
-**Open it:** https://brandoonie1-boop.github.io/guitar-tab/
+**Open it:** https://guitar-tab.onrender.com/ (hosted on Render from this repo; every push to `main` redeploys it)
 
 ## Install it like an app
 
@@ -38,9 +38,11 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 | | result |
 |---|---|
 | Notes found, guitar on its own (onset F1) | 81% on average: chord comping 75%, single-note lines 87% |
-| Notes found with drums and bass mixed in, after isolation | about 77% (10 comping takes) |
-| String/fret matches what the player used, given the right notes | 73% |
-| Tuning + capo correct on standard-tuning takes | 9 in 10 or better |
+| Notes found with drums and bass mixed in, after isolation | about 77% |
+| String/fret matches what the player used (true notes / transcribed notes) | 75% / 70% |
+| Tuning + capo correct on standard-tuning takes | about 19 in 20 |
+| Tuning + capo correct on test riffs in DAEABE, FACGCE, open D, drop D, Eb, capo 2/3/7 | 9 of 10 (DADGAD capo 2 was mistaken for standard) |
+| Tempo correct (with drums) | 32 of 40 takes; the rest were half or double speed, fixable with one tap |
 
 Things it cannot know for sure:
 
@@ -53,7 +55,7 @@ Things it cannot know for sure:
 
 | Step | What does it |
 |---|---|
-| Guitar isolation | [Demucs v4](https://github.com/adefossez/demucs) `htdemucs_6s` (has a dedicated guitar stem), exported to ONNX with the STFT done in JS. Checked against the PyTorch model: 81 dB SNR. |
+| Guitar isolation | [Demucs v4](https://github.com/adefossez/demucs) `htdemucs_6s` (has a dedicated guitar stem), exported to ONNX with the STFT done in JS and attention computed in blocks to save memory. Runs on the graphics chip (WebGPU) when there is one, checks its output, and falls back to the processor. Matches the PyTorch model to 80+ dB SNR on both paths. |
 | Two guitars | stereo-position split of the guitar stem |
 | Notes | Spotify [basic-pitch](https://github.com/spotify/basic-pitch) (ONNX) + a JS port of its note decoding, thresholds re-tuned on GuitarSet |
 | Tempo / beats | onset envelope + dynamic-programming beat tracker |
@@ -73,7 +75,7 @@ Code layout:
 
 ## Building
 
-The repo is ready to serve as-is (GitHub Pages serves the root of `main`). After changing code, run:
+The repo is ready to serve as-is: Render serves the root of `main` as a static site. GitHub Pages works too (Settings → Pages → Deploy from branch `main`, folder `/`). After changing code, run:
 
 ```
 npm install onnxruntime-web@1.30.0

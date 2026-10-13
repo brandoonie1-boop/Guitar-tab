@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>gpu nodes</title>
+<pre id="out">running</pre>
+<script type="module">
+// Creates the Demucs session on WebGPU with verbose logging, to see which nodes fall back to the CPU.
+const out = document.getElementById('out');
+const log = (s) => { out.textContent += '\n' + s; console.log(s); };
+try {
+  const mod = await import('../vendor/ort/ort.webgpu.bundle.min.mjs');
+  const ort = mod.default && mod.default.InferenceSession ? mod.default : mod;
+  const manifest = await (await fetch('../assets.json')).json();
+  const parts = await Promise.all(manifest.assets.ortWasmGpu.parts.map((p) => fetch('../' + p).then((r) => r.arrayBuffer())));
+  const tot = parts.reduce((s, p) => s + p.byteLength, 0); const wb = new Uint8Array(tot); let o = 0;
+  for (const p of parts) { wb.set(new Uint8Array(p), o); o += p.byteLength; }
+  ort.env.wasm.wasmBinary = wb; ort.env.wasm.numThreads = 1;
+  ort.env.logLevel = 'verbose';
+  const model = new URLSearchParams(location.search).get('model') || 'models/htdemucs_6s.f16.onnx';
+  const bytes = new Uint8Array(await (await fetch('../' + model)).arrayBuffer());
+  await ort.InferenceSession.create(bytes, { executionProviders: ['webgpu'], logSeverityLevel: 0, logVerbosityLevel: 0 });
+  log('created');
+} catch (e) { log('ERROR ' + (e && e.stack || e)); }
+log('DONE');
+</script>

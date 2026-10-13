@@ -12,16 +12,16 @@ import { candidateSetups, soundingOpen, tuningName, TUNINGS, STANDARD } from './
 export const FINGER_COSTS = {
   // tuned on GuitarSet: real players' string choices, on both annotated and transcribed notes
   // (tests/sweep_fingering.mjs, tests/sweep_finger_est.mjs)
-  fretted: 0.02, // fretting a note vs. an open string (tie-break toward open strings)
+  fretted: 0, // fretting a note vs. an open string
   fretHeight: 0, // per fret above the capo
   highFret: 0.3, // extra per fret above 12
   reach: 3, // frets the hand covers without moving (window start .. start+reach)
   stretch: 0.2, // per (fret of stretch beyond the window)^2
   maxSpan: 6, // never hold frets further apart than this
-  move: 0.5, // per fret of hand movement (scaled by speed)
+  move: 0.3, // per fret of hand movement (scaled by speed)
   moveBase: 0, // any position shift
   cut: 2.0, // cutting off a note that is still clearly ringing
-  cutTime: 0.15, // seconds of remaining ring that count as a full cut
+  cutTime: 0.3, // seconds of remaining ring that count as a full cut
   drop: 7.0, // a note that cannot be played in this setup
   fingers: 2.5, // per finger needed beyond 4
   stringGap: 0.7, // per skipped string inside a chord of 3+ notes

@@ -86,23 +86,59 @@ const shell = ['./', './index.html', 'manifest.webmanifest', 'assets.json',
 const sw = fs.readFileSync(r('tools/sw.template.js'), 'utf8').replace('__VERSION__', version).replace('__SHELL__', JSON.stringify(shell, null, 1));
 fs.writeFileSync(r('sw.js'), sw);
 
-// artifact page: content only (the viewer adds the document skeleton)
-fs.mkdirSync(r('dist-artifact'), { recursive: true });
+// ---------------------------------------------------------------------------
+// Artifact build (dist-artifact/): the Claude artifact host serves only common web types,
+// so the engine goes out as a real .wasm file and models/soundfont as base64 text parts.
+const AD = r('dist-artifact');
+fs.rmSync(AD, { recursive: true, force: true });
+fs.mkdirSync(path.join(AD, 'assets'), { recursive: true });
+const B64_RAW_CHUNK = 9 * 1024 * 1024; // -> 12 MB of text per part (host limit 16 MB per text file)
+function b64Asset(src, name) {
+  const buf = fs.readFileSync(src);
+  const h = hash(buf);
+  const parts = [];
+  let dl = 0;
+  for (let i = 0, k = 0; i < buf.length; i += B64_RAW_CHUNK, k++) {
+    const rel = `assets/${name}-${h}.${k}.b64.txt`;
+    const txt = buf.subarray(i, Math.min(buf.length, i + B64_RAW_CHUNK)).toString('base64');
+    fs.writeFileSync(path.join(AD, rel), txt);
+    dl += txt.length;
+    parts.push(rel);
+  }
+  return { size: buf.length, dl, sha: h, enc: 'b64', parts };
+}
+function wasmAsset(src, name) {
+  const buf = fs.readFileSync(src);
+  const h = hash(buf);
+  const rel = `assets/${name}-${h}.wasm`;
+  fs.copyFileSync(src, path.join(AD, rel));
+  return { size: buf.length, sha: h, enc: 'raw', parts: [rel] };
+}
+const artAssets = {
+  ortWasm: wasmAsset(path.join(ortDir, 'ort-wasm-simd-threaded.wasm'), 'ort-wasm'),
+  // the GPU engine is over the host's 15 MB binary limit, so it ships as base64 text parts
+  ortWasmGpu: b64Asset(path.join(ortDir, 'ort-wasm-simd-threaded.asyncify.wasm'), 'ort-wasm-gpu'),
+  demucs: b64Asset(r('models/htdemucs_6s.f16.onnx'), 'demucs-6s'),
+  basicpitch: b64Asset(r('models/basic_pitch.onnx'), 'basic-pitch'),
+  soundfont: b64Asset(r('vendor/alphatab/soundfont/sonivox.sf3'), 'soundfont'),
+};
+fs.writeFileSync(path.join(AD, 'assets.json'), JSON.stringify({ version, artifact: true, ort: manifest.ort, assets: artAssets }, null, 1));
 const artifact = `<title>Guitar Tab</title>
 <style>
 ${css}
 </style>
 ${body}
-<script type="module" src="app/main.js?v=${version}"></script>
+<script type="module" src="app/main.js"></script>
 `;
-fs.writeFileSync(r('dist-artifact/index.html'), artifact);
-// list of files the artifact needs (published path -> source path)
+fs.writeFileSync(path.join(AD, 'index.html'), artifact);
+// files the artifact needs: published path -> source path (relative to the repo root)
 const files = {};
-const add = (p) => { files[p] = p; };
-for (const d of ['app', 'engine']) for (const f of fs.readdirSync(r(d))) if (f.endsWith('.js')) add(`${d}/${f}`);
-for (const p of ['assets.json', 'vendor/ort/ort.wasm.bundle.min.mjs', 'vendor/ort/ort.webgpu.bundle.min.mjs', 'vendor/alphatab/alphaTab.mjs', 'vendor/alphatab/alphaTab.core.mjs',
-  'vendor/alphatab/alphaTab.worker.mjs', 'vendor/alphatab/alphaTab.worklet.mjs', 'vendor/alphatab/font/Bravura.woff2', 'vendor/alphatab/font/Bravura.woff', 'vendor/alphatab/soundfont/sonivox.sf3']) add(p);
-for (const a of Object.values(assets)) for (const p of a.parts) add(p);
-fs.writeFileSync(r('dist-artifact/files.json'), JSON.stringify(files, null, 1));
+for (const d of ['app', 'engine']) for (const f of fs.readdirSync(r(d))) if (f.endsWith('.js')) files[`${d}/${f}`] = `${d}/${f}`;
+for (const p of ['vendor/ort/ort.wasm.bundle.min.mjs', 'vendor/ort/ort.webgpu.bundle.min.mjs', 'vendor/alphatab/alphaTab.mjs', 'vendor/alphatab/alphaTab.core.mjs',
+  'vendor/alphatab/alphaTab.worker.mjs', 'vendor/alphatab/alphaTab.worklet.mjs', 'vendor/alphatab/font/Bravura.woff2', 'vendor/alphatab/font/Bravura.woff']) files[p] = p;
+files['assets.json'] = 'dist-artifact/assets.json';
+for (const a of Object.values(artAssets)) for (const p of a.parts) files[p] = `dist-artifact/${p}`;
+fs.writeFileSync(path.join(AD, 'files.json'), JSON.stringify(files, null, 1));
 console.log('built version', version);
 for (const [k, a] of Object.entries(assets)) console.log(`  ${k}: ${(a.size / 1e6).toFixed(1)} MB in ${a.parts.length} part(s)`);
+console.log('artifact parts:', Object.values(artAssets).reduce((n, a) => n + a.parts.length, 0), 'files', Object.keys(files).length);

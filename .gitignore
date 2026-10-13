@@ -3,3 +3,4 @@ models/*.onnx
 dist-artifact/
 *.log
 .DS_Store
+testdata/
