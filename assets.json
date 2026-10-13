@@ -1,5 +1,5 @@
 {
- "version": "fd1b3468ee",
+ "version": "990d35b891",
  "ort": {
   "wasm": "vendor/ort/ort.wasm.bundle.min.mjs",
   "webgpu": "vendor/ort/ort.webgpu.bundle.min.mjs"
