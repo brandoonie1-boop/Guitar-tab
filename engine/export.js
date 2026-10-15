@@ -78,11 +78,15 @@ export function toAlphaTex(doc) {
     lines.push(`\\tuning (${tun}) { label "${esc(tuningName(part.tuning))}" }`);
     if (part.capo) lines.push(`\\capo ${part.capo}`);
     const techMap = part.tech || new Map();
+    let prevLen = 0;
     part.measures.forEach((m, mi) => {
-      const head = mi === 0 ? `\\ts (${doc.meter} 4) ` : '';
+      // time signature on the first bar and wherever the bar length changes
+      const len = m.beats.length;
+      const head = len !== prevLen ? `\\ts (${len} 4) ` : '';
+      prevLen = len;
       const toks = [];
       const bmap = [];
-      for (const { seg, pieces } of beatTokens(m, doc.meter)) {
+      for (const { seg, pieces } of beatTokens(m, len)) {
         pieces.forEach(([dv, dotted, tup], pi) => {
           const eff = [];
           if (dotted) eff.push('d');
@@ -118,7 +122,8 @@ export function toAscii(doc, opts = {}) {
     out.push(`${part.name}`);
     out.push(`Tuning: ${part.tuning.map((m) => midiName(m, false)).join(' ')} (${tuningName(part.tuning)}), low to high`);
     out.push(part.capo ? `Capo: fret ${part.capo} (fret numbers below are counted from the capo, 0 = capo)` : 'Capo: none');
-    out.push(`Tempo: ~${Math.round(doc.bpm)} BPM, ${doc.meter}/4`);
+    const lens = new Set(part.measures.map((m) => m.beats.length));
+    out.push(`Tempo: ~${Math.round(doc.bpm)} BPM, ${lens.size > 1 ? `mostly ${doc.meter}/4 (the meter changes; bars are marked |)` : `${doc.meter}/4`}`);
     out.push('');
     const labels = part.tuning.map((m, i) => midiName(m, false)).map((s, i, arr) => (i === arr.length - 1 ? s.toLowerCase() : s));
     const labW = Math.max(...labels.map((l) => l.length));

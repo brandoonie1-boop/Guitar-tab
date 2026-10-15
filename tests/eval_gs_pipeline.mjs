@@ -16,7 +16,7 @@ const AUD = '/home/claude/work/data/guitarset/audio';
 const ortMod = await import('/home/claude/work/jsenv/node_modules/onnxruntime-node/dist/index.js');
 const ort = ortMod.default || ortMod;
 const MODELS = '/home/claude/guitar-tab/models';
-let demucs = null, bp = null;
+let demucs = null, bp = null, bm = null;
 const STD = [40, 45, 50, 55, 59, 64];
 const extraOpts = process.env.OPTS ? JSON.parse(process.env.OPTS) : {};
 
@@ -34,6 +34,7 @@ for (const name of names) {
     // DEMUCS=<onnx file> SEG=<segment samples> to evaluate another export (e.g. the light model)
     getDemucs: async () => demucs || (demucs = Object.assign(await ort.InferenceSession.create(process.env.DEMUCS || path.join(MODELS, 'htdemucs_6s.f16.onnx'), { intraOpNumThreads: 2 }), { segment: Number(process.env.SEG || 343980) })),
     getBasicPitch: async () => bp || (bp = await ort.InferenceSession.create(path.join(MODELS, 'basic_pitch.onnx'))),
+    getBeatModel: process.env.NO_BEAT_MODEL ? null : async () => bm || (bm = await ort.InferenceSession.create(path.join(MODELS, 'beat_this_small.f16.onnx'), { intraOpNumThreads: 2 })),
   });
   const p = res.parts[0];
   const est = p.notes.filter((n) => !n.dropped);

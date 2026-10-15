@@ -3,12 +3,13 @@ import { separate, DEMUCS } from './demucs.js';
 import { runModel, outputToNotes, addPitchBends, frameTime, BP } from './basicpitch.js';
 import { resample, toMono, rms } from './dsp.js';
 import { analyzeRhythm, envSampler } from './beats.js';
+import { beatActivations, beatsAndBars, BT } from './beatthis.js';
 import { estimateTuningCents } from './pitchref.js';
 import { splitStereo, chooseParts } from './stereo.js';
 import { cleanNotes } from './notes.js';
 import { rankSetups, assignFingering, buildEvents } from './fretboard.js';
 import { detectTechniques } from './techniques.js';
-import { quantize, extendBeats } from './rhythm.js';
+import { quantize, extendBeats, beatPos } from './rhythm.js';
 import { toAlphaTex, toAscii } from './export.js';
 import { tuningName } from './tunings.js';
 
@@ -75,7 +76,7 @@ export async function detectNotes(env, mono44, opts, cents, onProgress) {
  * @param audio {left, right, sr(=44100), name, offset?}. Takes ownership of the arrays (it
  *   clears audio.left/right) so memory can be released as soon as they are used.
  * @param env {ort, getDemucs, releaseDemucs?, progress, cancelled, checkSeparation?, fallbackToCpu?}
- * @returns {gL, gR, rhythm, stereo, sr, offset, duration, name}
+ * @returns {gL, gR, mix22 (mono mix at 22.05 kHz for the beat tracker), stereo, sr, offset, duration, name}
  */
 export async function separateStage(audio, userOpts = {}, env) {
   const opts = { ...DEFAULT_OPTS, ...userOpts };
@@ -96,11 +97,11 @@ export async function separateStage(audio, userOpts = {}, env) {
   }
   const meta = { stereo, sr, offset, duration: left.length / sr, name: audio.name || 'Song' };
   progress('prepare', 1, 'Getting ready');
-  if (opts.isolate === 'off') return { ...meta, gL: left, gR: right, rhythm: null };
+  if (opts.isolate === 'off') return { ...meta, gL: left, gR: right, mix22: null };
   progress('separate', 0, 'Isolating the guitar');
   let session = await env.getDemucs((f) => progress('separate', 0.02 * f, 'Loading the separation model'));
-  // only what is used later: guitar (stereo, for the two-guitar split), drums (mono, for the beat)
-  const keep = { guitar: 'stereo', drums: 'mono' };
+  // only what is used later: the guitar (stereo, for the two-guitar split)
+  const keep = { guitar: 'stereo' };
   if (opts.isolate === 'guitar+other') keep.other = 'stereo';
   const sepOpts = {
     keep,
@@ -127,12 +128,12 @@ export async function separateStage(audio, userOpts = {}, env) {
     const [oL, oR] = st.other;
     for (let i = 0; i < gL.length; i++) { gL[i] += oL[i]; gR[i] += oR[i]; }
   }
-  // the beat tracker hears the mix with the drums brought forward, built in place in the drums array
-  const rhythm = st.drums[0];
-  for (let i = 0; i < rhythm.length; i++) rhythm[i] = 0.5 * Math.fround((left[i] + right[i]) / 2) + rhythm[i];
-  st = null; left = null; right = null;
+  st = null;
+  // the beat tracker listens to the whole mix (what it was trained on), at 22.05 kHz
+  const mix22 = mixForBeats(left, right);
+  left = null; right = null;
   if (cancelled()) throw new Error('cancelled');
-  return { ...meta, gL, gR, rhythm };
+  return { ...meta, gL, gR, mix22 };
 }
 
 /**
@@ -145,12 +146,27 @@ export async function analyzeStage(stems, userOpts = {}, env) {
   const progress = makeProgress(env.progress);
   const { sr, stereo, offset, duration } = stems;
   const gL = stems.gL, gR = stems.gR || stems.gL;
-  // 2. rhythm
+  // 2. beats and bars
   progress('rhythm', 0, 'Finding the beat');
-  let rhythmSrc = stems.rhythm || toMono([gL, gR]);
-  stems.rhythm = null;
-  const rh = analyzeRhythm(rhythmSrc, sr, { bpm: opts.bpm, meter: opts.meter });
-  rhythmSrc = null;
+  let mix22 = stems.mix22 || mixForBeats(gL, gR);
+  stems.mix22 = null;
+  let rh = null;
+  if (env.getBeatModel) {
+    try {
+      const bs = await env.getBeatModel();
+      const act = await beatActivations(env.ort, bs, mix22, BT.sr, { onProgress: (f) => progress('rhythm', 0.95 * f, 'Finding the beat'), shouldCancel: env.cancelled });
+      const bb = beatsAndBars(act, { meter: opts.meter || undefined });
+      if (bb.beats.length >= 8) rh = { bpm: bb.bpm, bpmCandidates: [bb.bpm], beats: bb.beats, meter: bb.meter, downbeatPhase: bb.downbeatPhase, bars: bb.bars, tracker: 'beat-this' };
+    } catch (err) {
+      if (err && err.message === 'cancelled') throw err;
+      console.warn('beat model failed, using the simple beat tracker', err);
+    }
+  }
+  if (!rh) {
+    const r = analyzeRhythm(mix22, BT.sr, { bpm: opts.bpm, meter: opts.meter });
+    rh = { bpm: r.bpm, bpmCandidates: r.bpmCandidates, beats: r.beats, meter: r.meter, downbeatPhase: r.downbeatPhase, bars: null, tracker: 'simple' };
+  }
+  mix22 = null;
   progress('rhythm', 1, 'Finding the beat');
   // 3. split guitars by stereo position
   progress('split', 0, 'Checking for more than one guitar');
@@ -212,13 +228,22 @@ export async function analyzeStage(stems, userOpts = {}, env) {
     duration, offset, sr,
     tuningCents: cents, tuningRef,
     splitInfo,
-    rhythm: { bpm: rh.bpm, bpmCandidates: rh.bpmCandidates, beats: rh.beats, meter: rh.meter, downbeatPhase: rh.downbeatPhase },
+    rhythm: rh,
     stems: { guitar: [gL, gR] },
     parts,
   };
   layout(result);
   progress('tab', 1, 'Done');
   return result;
+}
+
+/** Mono mix at 22.05 kHz with a steep low-pass like soxr's (what the beat model expects). */
+export function mixForBeats(left, right) {
+  const n = left.length;
+  const mono = new Float32Array(n);
+  if (right && right !== left) for (let i = 0; i < n; i++) mono[i] = (left[i] + right[i]) / 2;
+  else mono.set(left);
+  return resample(mono, DEMUCS.sr, BT.sr, 64, 0.958);
 }
 
 /** Both stages in one go (Node tools and tests). */
@@ -270,32 +295,25 @@ export function layout(result, override = {}) {
   if (override.bpm || override.meter || override.shift != null) {
     if (override.meter) rh.meter = override.meter;
     if (override.shift != null) rh.downbeatPhase = ((rh.downbeatPhase + override.shift) % rh.meter + rh.meter) % rh.meter;
+    rh.bars = null;
   }
   const beats = extendBeats(rh.beats, result.duration, rh.bpm);
-  // index of first downbeat in the extended list
-  const firstTracked = rh.beats.length ? beats.findIndex((b) => Math.abs(b - rh.beats[0]) < 1e-6) : 0;
-  const downbeatBeat = Math.max(0, firstTracked) + (rh.downbeatPhase || 0);
-  result.grid = { beats, meter: rh.meter, downbeatBeat };
-  for (const p of result.parts) {
-    const placed = p.notes.filter((n) => !n.dropped && !n.deleted && n.string != null);
-    const q = quantize(placed, { beats, meter: rh.meter, downbeatBeat });
+  // index of first tracked beat in the extended list
+  const firstTracked = rh.beats.length ? Math.max(0, beats.findIndex((b) => Math.abs(b - rh.beats[0]) < 1e-6)) : 0;
+  const meter = rh.meter || 4;
+  // bar lines: the beat model's (the meter may change) or a steady meter from the first downbeat
+  const barStarts = rh.bars && rh.bars.length ? rh.bars.map((b) => firstTracked + b.beat) : [firstTracked + (rh.downbeatPhase || 0)];
+  const downbeatBeat = barStarts[0];
+  result.grid = { beats, meter, downbeatBeat, barStarts };
+  // every part gets the same bars, covering the notes of all parts
+  let t0 = Infinity, t1 = -Infinity;
+  const placed = result.parts.map((p) => p.notes.filter((n) => !n.dropped && !n.deleted && n.string != null));
+  for (const ns of placed) for (const n of ns) { t0 = Math.min(t0, n.t0); t1 = Math.max(t1, n.t1); }
+  const range = Number.isFinite(t0) ? { firstBeat: Math.floor(beatPos(beats, t0)), lastBeat: Math.max(0, Math.ceil(beatPos(beats, t1)) - 1) } : { firstBeat: 0, lastBeat: 0 };
+  result.parts.forEach((p, i) => {
+    const q = quantize(placed[i], { beats, meter, downbeatBeat, barStarts }, range);
     p.measures = q.measures;
-  }
-  // all parts should have the same number of measures
-  const nM = Math.max(...result.parts.map((p) => p.measures.length));
-  for (const p of result.parts) {
-    while (p.measures.length < nM) {
-      const last = p.measures[p.measures.length - 1];
-      const s = last ? last.startBeat + rh.meter : 0;
-      p.measures.push({ startBeat: s, beats: Array.from({ length: rh.meter }, (_, j) => ({ beat: s + j, grid: 4, segs: [{ s: 0, len: 4, notes: null }] })) });
-    }
-    // align start beat with the first part
-    const s0 = Math.min(...result.parts.map((q) => q.measures[0]?.startBeat ?? 0));
-    while (p.measures.length && p.measures[0].startBeat > s0) {
-      const s = p.measures[0].startBeat - rh.meter;
-      p.measures.unshift({ startBeat: s, beats: Array.from({ length: rh.meter }, (_, j) => ({ beat: s + j, grid: 4, segs: [{ s: 0, len: 4, notes: null }] })) });
-    }
-  }
+  });
   const doc = docOf(result);
   const at = toAlphaTex(doc);
   result.alphaTex = at.tex;

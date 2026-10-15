@@ -100,6 +100,20 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
 .drop h1 { font-size: 22px; }
 .drop p { margin: 0; color: var(--muted); max-width: 60ch; }
 .picked { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.link-row { display: flex; gap: 8px; width: 100%; max-width: 640px; }
+.link-row input { flex: 1; min-width: 0; min-height: 44px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); padding: 0 12px; }
+.source { width: 100%; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.source h2 { font-size: 16px; }
+.source p, .source ol { margin: 0; color: var(--fg); max-width: 65ch; }
+.source ol { padding-left: 1.3em; display: grid; gap: 4px; }
+.source .player-frame { position: relative; width: 100%; max-width: 640px; aspect-ratio: 16 / 9; border-radius: 8px; overflow: hidden; background: #000; }
+.source .player-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.rec-status { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); animation: blink 1.2s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .rec-dot { animation: none; } }
+.meter { width: 160px; height: 8px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.meter > i { display: block; height: 100%; width: 0; background: var(--good); transition: width 0.15s linear; }
 .picked strong { word-break: break-word; }
 
 .settings { display: grid; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
@@ -246,15 +260,21 @@ button.fact:hover { border-color: var(--accent); }
     <p class="notice" id="runNotice" role="status" hidden></p>
     <div class="drop" id="drop">
       <h1>Turn a song into guitar tab</h1>
-      <p>Pick any audio or video file. The app pulls the guitar out of the mix, works out the tuning and where the capo is, and writes the tab. Everything runs on this device; nothing is uploaded.</p>
+      <p>Pick an audio or video file, paste a link, or record the song while it plays. The app pulls the guitar out of the mix, works out the tuning and where the capo is, and writes the tab. Everything runs on this device; nothing is uploaded.</p>
       <div class="picked" id="picked" hidden>
         <strong id="pickedName"></strong><span class="muted small" id="pickedInfo"></span>
       </div>
       <div class="range-row">
         <label class="btn" for="fileInput">Choose a file</label>
         <input id="fileInput" type="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.mp4,.mov,.webm" hidden>
+        <button class="btn" id="recordBtn" type="button">Record</button>
         <button class="btn primary" id="startBtn" type="button" disabled>Make the tab</button>
       </div>
+      <form class="link-row" id="linkForm" autocomplete="off">
+        <input id="linkInput" type="url" inputmode="url" enterkeyhint="go" placeholder="Or paste a link: YouTube, SoundCloud, an MP3…" aria-label="Link to a song">
+        <button class="btn" type="submit">Use link</button>
+      </form>
+      <div class="source" id="sourcePanel" hidden></div>
       <p class="small error" id="startError" hidden></p>
     </div>
 
@@ -400,6 +420,6 @@ button.fact:hover { border-color: var(--accent); }
   </div>
 </div>
 
-<script type="module" src="app/main.js?v=9c06959f9f"></script>
+<script type="module" src="app/main.js?v=9c2a4b051c"></script>
 </body>
 </html>

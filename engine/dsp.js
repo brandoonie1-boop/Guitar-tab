@@ -32,10 +32,11 @@ function sincKernel(halfZeros, oversample, beta) {
 }
 
 // Band-limited resampling with a Kaiser-windowed sinc. Returns Float32Array.
-export function resample(input, srIn, srOut, halfZeros = 24) {
+// cutoffFrac: where the low-pass sits, as a fraction of the lower Nyquist frequency.
+export function resample(input, srIn, srOut, halfZeros = 24, cutoffFrac = 0.97) {
   if (srIn === srOut) return Float32Array.from(input);
   const ratio = srOut / srIn;
-  const cutoff = Math.min(1, ratio) * 0.97; // fraction of input Nyquist
+  const cutoff = Math.min(1, ratio) * cutoffFrac; // fraction of input Nyquist
   const oversample = 256;
   const kernel = sincKernel(halfZeros, oversample, 8.6);
   const outLen = Math.max(1, Math.round(input.length * ratio));

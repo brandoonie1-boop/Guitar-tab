@@ -39,6 +39,8 @@ const assets = {
   demucsFull: chunkFile(r('models/demucs-343980.chain'), 'demucs-full'),
   demucsLite: chunkFile(r('models/demucs-171990.chain'), 'demucs-lite'),
   basicpitch: chunkFile(r('models/basic_pitch.onnx'), 'basic-pitch'),
+  // beats and bar lines: Beat This! small (CPJKU, MIT), tools/export_beat_this.py
+  beatModel: chunkFile(r('models/beat_this_small.f16.onnx'), 'beat-this'),
 };
 // the version changes whenever any app or engine file changes, so cached copies refresh
 const srcFiles = ['app', 'engine'].flatMap((d) => fs.readdirSync(r(d)).filter((f) => f.endsWith('.js') || f.endsWith('.html') || f.endsWith('.css')).sort().map((f) => fs.readFileSync(r(`${d}/${f}`))));
@@ -128,6 +130,7 @@ const artAssets = {
   demucsFull: b64Asset(r('models/demucs-343980.chain'), 'demucs-full'),
   demucsLite: b64Asset(r('models/demucs-171990.chain'), 'demucs-lite'),
   basicpitch: b64Asset(r('models/basic_pitch.onnx'), 'basic-pitch'),
+  beatModel: b64Asset(r('models/beat_this_small.f16.onnx'), 'beat-this'),
   soundfont: b64Asset(r('vendor/alphatab/soundfont/sonivox.sf3'), 'soundfont'),
 };
 fs.writeFileSync(path.join(AD, 'assets.json'), JSON.stringify({ version, artifact: true, ort: manifest.ort, assets: artAssets }, null, 1));

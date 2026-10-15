@@ -84,6 +84,20 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
 .drop h1 { font-size: 22px; }
 .drop p { margin: 0; color: var(--muted); max-width: 60ch; }
 .picked { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.link-row { display: flex; gap: 8px; width: 100%; max-width: 640px; }
+.link-row input { flex: 1; min-width: 0; min-height: 44px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); padding: 0 12px; }
+.source { width: 100%; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.source h2 { font-size: 16px; }
+.source p, .source ol { margin: 0; color: var(--fg); max-width: 65ch; }
+.source ol { padding-left: 1.3em; display: grid; gap: 4px; }
+.source .player-frame { position: relative; width: 100%; max-width: 640px; aspect-ratio: 16 / 9; border-radius: 8px; overflow: hidden; background: #000; }
+.source .player-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.rec-status { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); animation: blink 1.2s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .rec-dot { animation: none; } }
+.meter { width: 160px; height: 8px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.meter > i { display: block; height: 100%; width: 0; background: var(--good); transition: width 0.15s linear; }
 .picked strong { word-break: break-word; }
 
 .settings { display: grid; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }

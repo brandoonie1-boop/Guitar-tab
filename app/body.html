@@ -14,15 +14,21 @@
     <p class="notice" id="runNotice" role="status" hidden></p>
     <div class="drop" id="drop">
       <h1>Turn a song into guitar tab</h1>
-      <p>Pick any audio or video file. The app pulls the guitar out of the mix, works out the tuning and where the capo is, and writes the tab. Everything runs on this device; nothing is uploaded.</p>
+      <p>Pick an audio or video file, paste a link, or record the song while it plays. The app pulls the guitar out of the mix, works out the tuning and where the capo is, and writes the tab. Everything runs on this device; nothing is uploaded.</p>
       <div class="picked" id="picked" hidden>
         <strong id="pickedName"></strong><span class="muted small" id="pickedInfo"></span>
       </div>
       <div class="range-row">
         <label class="btn" for="fileInput">Choose a file</label>
         <input id="fileInput" type="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.mp4,.mov,.webm" hidden>
+        <button class="btn" id="recordBtn" type="button">Record</button>
         <button class="btn primary" id="startBtn" type="button" disabled>Make the tab</button>
       </div>
+      <form class="link-row" id="linkForm" autocomplete="off">
+        <input id="linkInput" type="url" inputmode="url" enterkeyhint="go" placeholder="Or paste a link: YouTube, SoundCloud, an MP3…" aria-label="Link to a song">
+        <button class="btn" type="submit">Use link</button>
+      </form>
+      <div class="source" id="sourcePanel" hidden></div>
       <p class="small error" id="startError" hidden></p>
     </div>
 

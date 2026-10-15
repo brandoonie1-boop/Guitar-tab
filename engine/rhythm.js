@@ -119,37 +119,45 @@ export function quantize(notes, rhythm, opts = {}) {
       cur = b + k1 / g;
     }
   }
-  // measures
+  // measures: rhythm.barStarts lists the beat index of every bar line (bars may differ in
+  // length when the meter changes); otherwise a steady meter from rhythm.downbeatBeat
   const m = meter || 4;
-  let firstDown = rhythm.downbeatBeat ?? 0;
-  while (firstDown - m >= 0) firstDown -= m;
-  // measure 0 starts at firstDown - m if there's music before firstDown (pickup padded with rests)
-  const firstEventBeat = evs.length ? evs[0].b : 0;
-  let mStart = firstDown;
-  while (mStart > firstEventBeat) mStart -= m;
-  const lastBeat = evs.length ? Math.max(...Array.from(segsByBeat.keys())) : 0;
+  let starts = rhythm.barStarts;
+  const firstEventBeat = opts.firstBeat ?? (evs.length ? evs[0].b : 0);
+  const lastBeat = opts.lastBeat ?? (evs.length ? Math.max(...Array.from(segsByBeat.keys())) : 0);
+  if (!starts || !starts.length) {
+    let firstDown = rhythm.downbeatBeat ?? 0;
+    while (firstDown - m >= 0) firstDown -= m;
+    starts = [firstDown];
+  }
+  starts = starts.slice();
+  while (starts[0] > firstEventBeat) starts.unshift(starts[0] - m);
+  while (starts[starts.length - 1] + m <= lastBeat) starts.push(starts[starts.length - 1] + m);
   const measures = [];
-  for (let s = mStart; s <= lastBeat; s += m) {
+  for (let k = 0; k < starts.length; k++) {
+    const s = starts[k];
+    const e = k + 1 < starts.length ? starts[k + 1] : s + m;
+    if (e <= firstEventBeat) continue;
+    if (s > lastBeat) break;
     const mb = [];
-    for (let j = 0; j < m; j++) {
-      const b = s + j;
+    for (let b = s; b < e; b++) {
       const g = b >= 0 ? beatGrid[b] || 4 : 4;
       const segs = (segsByBeat.get(b) || []).slice().sort((x, y) => x.s - y.s);
       // fill gaps with rests
       const filled = [];
-      let k = 0;
+      let k2 = 0;
       for (const sg of segs) {
-        if (sg.s > k) filled.push({ s: k, len: sg.s - k, notes: null });
-        if (sg.s < k) { // overlapping (shouldn't happen) - clip
-          const nl = sg.s + sg.len - k;
-          if (nl > 0) filled.push({ ...sg, s: k, len: nl });
-          k = Math.max(k, sg.s + sg.len);
+        if (sg.s > k2) filled.push({ s: k2, len: sg.s - k2, notes: null });
+        if (sg.s < k2) { // overlapping (shouldn't happen) - clip
+          const nl = sg.s + sg.len - k2;
+          if (nl > 0) filled.push({ ...sg, s: k2, len: nl });
+          k2 = Math.max(k2, sg.s + sg.len);
           continue;
         }
         filled.push(sg);
-        k = sg.s + sg.len;
+        k2 = sg.s + sg.len;
       }
-      if (k < g) filled.push({ s: k, len: g - k, notes: null });
+      if (k2 < g) filled.push({ s: k2, len: g - k2, notes: null });
       mb.push({ beat: b, grid: g, segs: filled, time: b >= 0 && b < beats.length ? beats[b] : null });
     }
     measures.push({ startBeat: s, beats: mb });

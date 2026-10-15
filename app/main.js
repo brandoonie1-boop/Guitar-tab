@@ -4,6 +4,11 @@ import { midiName } from '../engine/dsp.js';
 import { applySetup, layout, docOf } from '../engine/pipeline.js';
 import { toMidi } from '../engine/export.js';
 import { decodeFile, wavBlob, makeZip, saveFile, copyText, inArtifact } from './files.js';
+import {
+  classifyLink, fetchMedia, captureDisplay, captureMic, makeAudioContext, recordStream, trimSilence, youtubePlayer,
+  canCaptureTab, canListen, canEmbedPlayer, IS_IOS,
+} from './capture.js';
+import { resample } from '../engine/dsp.js';
 import * as store from './store.js';
 
 const $ = (id) => document.getElementById(id);
@@ -150,6 +155,7 @@ document.querySelectorAll('[data-opt="isolate"]').forEach((b) => b.addEventListe
 
 async function pickFile(file) {
   if (!file) return;
+  closeSource();
   $('startError').hidden = true;
   $('startBtn').disabled = true;
   $('picked').hidden = false;
@@ -163,20 +169,266 @@ async function pickFile(file) {
     return;
   }
   try {
-    const a = await decodeFile(file);
-    state.file = file;
-    state.audio = a;
-    state.info = { duration: a.duration, channels: a.channels };
-    $('pickedInfo').textContent = `${fmtTime(a.duration)} · ${a.channels > 1 ? 'stereo' : 'mono'}`;
-    $('startBtn').disabled = false;
-    if (a.duration > 600) showError('This file is over 10 minutes. Pick a section below so it finishes in a reasonable time.');
-    else if (IS_PHONE && a.duration > 420) showError('Long song for a phone. If it stops partway, pick a section below.');
+    setPicked(file, await decodeFile(file));
   } catch (e) {
     state.file = null; state.audio = null; state.info = null;
     $('pickedInfo').textContent = '';
     showError("This file couldn't be read. Try an MP3, M4A, WAV or a phone video. (" + (e.message || e) + ')');
   }
 }
+
+// a song ready to go: the file (for playback and saving) and its decoded samples
+function setPicked(file, a) {
+  state.file = file;
+  state.audio = a;
+  state.info = { duration: a.duration, channels: a.channels || (a.right ? 2 : 1) };
+  $('picked').hidden = false;
+  $('pickedName').textContent = file.name;
+  $('pickedInfo').textContent = `${fmtTime(a.duration)} · ${state.info.channels > 1 ? 'stereo' : 'mono'}`;
+  $('startBtn').disabled = false;
+  $('startError').hidden = true;
+  if (a.duration > 600) showError('This file is over 10 minutes. Pick a section below so it finishes in a reasonable time.');
+  else if (IS_PHONE && a.duration > 420) showError('Long song for a phone. If it stops partway, pick a section below.');
+}
+
+/* ---------------- links and recording ---------------- */
+const panel = $('sourcePanel');
+let source = null; // {player, rec, ctx}
+
+function closeSource() {
+  if (source) {
+    if (source.player) source.player.destroy();
+    if (source.rec) source.rec.cancel();
+    if (source.ctx) source.ctx.close().catch(() => {});
+  }
+  source = null;
+  panel.hidden = true;
+  panel.innerHTML = '';
+}
+function openPanel(title, ...kids) {
+  closeSource();
+  source = {};
+  panel.hidden = false;
+  panel.append(el('h2', { text: title }), ...kids);
+}
+const btnRow = (...b) => el('div', { class: 'range-row' }, ...b);
+const button = (text, onclick, primary = false) => el('button', { class: primary ? 'btn primary' : 'btn', type: 'button', text, onclick });
+
+$('linkForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  useLink($('linkInput').value);
+});
+$('linkInput').addEventListener('paste', () => setTimeout(() => {
+  const v = $('linkInput').value.trim();
+  if (/^https?:\/\/\S+$/.test(v)) useLink(v);
+}, 0));
+$('recordBtn').addEventListener('click', () => recordPanel());
+
+function useLink(text) {
+  $('startError').hidden = true;
+  const L = classifyLink(text);
+  if (L.kind === 'invalid') { showError("That doesn't look like a link. Copy the whole address, starting with https://"); return; }
+  if (L.kind === 'direct') { downloadLink(L); return; }
+  if (L.kind === 'youtube') { youtubePanel(L); return; }
+  streamPanel(L);
+}
+
+async function downloadLink(L) {
+  const st = el('p', { text: 'Downloading…' });
+  openPanel('Downloading the file', st);
+  try {
+    const file = await fetchMedia(L.url, {
+      maxBytes: IS_PHONE ? 400e6 : 2e9,
+      onProgress: (f, n) => { st.textContent = `Downloading… ${f ? Math.round(f * 100) + '%' : (n / 1e6).toFixed(1) + ' MB'}`; },
+    });
+    await pickFile(file);
+  } catch (err) {
+    if (err.code === 'blocked') {
+      openPanel(`${L.share || 'This site'} won't hand the file to other pages`,
+        el('p', { text: 'Download the file to this device first, then use Choose a file. Or play it and record it with Record.' }),
+        btnRow(button('Open the link', () => window.open(L.url, '_blank', 'noopener')), button('Close', closeSource)));
+    } else {
+      openPanel("Couldn't use that link", el('p', { text: err.message }), btnRow(button('Close', closeSource)));
+    }
+  }
+}
+
+function phoneSteps(service) {
+  return el('ol', {},
+    el('li', { text: `Screen recording (best sound): open Control Center, start Screen Recording, play the song in ${service === 'YouTube' ? 'the YouTube app' : service}, then stop the recording. Come back, tap Choose a file and pick the recording from Photos.` }),
+    el('li', { text: 'Or listen: play the song out loud on another device or speaker, hold this phone close to it and tap Listen.' }));
+}
+
+function youtubePanel(L) {
+  if (canCaptureTab() && canEmbedPlayer()) {
+    const frame = el('div', { class: 'player-frame' });
+    const note = el('p', { text: "YouTube doesn't let apps download its audio, so the app records the video while it plays here. Press Record the song, choose This tab when your browser asks what to share, and keep Share tab audio on. The video plays from the start and recording stops when it ends." });
+    const status = el('div');
+    openPanel('YouTube', frame, note, status,
+      btnRow(button('Record the song', () => recordYouTube(L, status), true), button('Close', closeSource)));
+    source.player = youtubePlayer(frame, L.id, { start: L.start });
+    source.player.onError = (code) => {
+      if (code === 101 || code === 150 || code === 153) {
+        status.textContent = '';
+        otherTabPanel(L, 'YouTube', "This video's owner doesn't allow it to play inside other sites.");
+      }
+    };
+    return;
+  }
+  if (canCaptureTab()) { otherTabPanel(L, 'YouTube'); return; }
+  phonePanel(L, 'YouTube');
+}
+
+function streamPanel(L) {
+  const service = L.service || 'that site';
+  const why = L.protected
+    ? `${service} protects its audio, so no app can download it.`
+    : `${service} doesn't let other pages download its audio.`;
+  if (canCaptureTab()) otherTabPanel(L, service, why);
+  else phonePanel(L, service, why);
+}
+
+function otherTabPanel(L, service, why = '') {
+  openPanel(service,
+    el('p', { text: `${why} Record it while it plays instead:`.trim() }),
+    el('ol', {},
+      el('li', { text: 'Open the song (button below) and get it ready to play.' }),
+      el('li', { text: 'Come back here, press Record, and choose that tab with Share tab audio on. (For a desktop app like Spotify on Windows, choose Entire screen with Share system audio on.)' }),
+      el('li', { text: 'Play the song from the start. Press Stop when it ends.' })),
+    btnRow(button('Open the song', () => window.open(L.url, '_blank', 'noopener')), button('Record', () => startCapture('display', null), true), button('Close', closeSource)));
+}
+
+function phonePanel(L, service, why = '') {
+  const kids = [el('p', { text: `${why || `${service} doesn't let other apps take its audio.`} Two ways to get the song in:` }), phoneSteps(service)];
+  const buttons = [];
+  if (canListen()) buttons.push(button('Listen', () => startCapture('mic', null), true));
+  buttons.push(button('Close', closeSource));
+  openPanel(service, ...kids, btnRow(...buttons));
+}
+
+function recordPanel() {
+  if (canCaptureTab()) {
+    openPanel('Record what is playing',
+      el('p', { text: 'Press Start, then choose the tab that plays the song with Share tab audio on (or Entire screen with Share system audio on, for a desktop app). Play the song from the start and press Stop when it ends.' }),
+      btnRow(button('Start', () => startCapture('display', null), true), canListen() ? button('Use the microphone', () => startCapture('mic', null)) : null, button('Close', closeSource)));
+  } else {
+    const kids = [el('p', { text: 'Play the song out loud on another device or speaker, hold this phone close to it, and press Listen. A quiet room works best. Press Stop when the song ends.' })];
+    if (IS_IOS) kids.push(el('p', { class: 'small muted', text: 'For the best sound on iPhone, use Screen Recording while the song plays in its app instead, then pick the recording with Choose a file.' }));
+    openPanel('Listen to a song', ...kids, btnRow(canListen() ? button('Listen', () => startCapture('mic', null), true) : null, button('Close', closeSource)));
+  }
+}
+
+function recordingView(title, onStop) {
+  const time = el('span', { class: 'mono', text: '0:00' });
+  const bar = el('i');
+  const hint = el('p', { class: 'small muted', text: '' });
+  const view = el('div', { style: 'display:grid;gap:8px' },
+    el('div', { class: 'rec-status' }, el('span', { class: 'rec-dot', 'aria-hidden': 'true' }), el('strong', { text: title }), time,
+      el('div', { class: 'meter', 'aria-hidden': 'true' }, bar)),
+    hint,
+    btnRow(button('Stop', onStop, true), button('Cancel', () => { closeSource(); toast('Recording cancelled'); })));
+  return {
+    view,
+    level(peak, secs) {
+      bar.style.width = `${Math.min(100, Math.round(100 * Math.sqrt(peak)))}%`;
+      time.textContent = fmtTime(secs);
+    },
+    hint(t) { hint.textContent = t; },
+  };
+}
+
+// Record from the screen-share picker (a tab / the computer's sound) or the microphone.
+async function startCapture(kind, title, { keepPanel = false } = {}) {
+  const ctx = makeAudioContext(); // inside the tap, for iPhone
+  let stream;
+  try {
+    stream = kind === 'mic' ? await captureMic() : await captureDisplay({ thisTab: false });
+  } catch (err) {
+    ctx.close().catch(() => {});
+    if (err && err.name === 'NotAllowedError') { toast(kind === 'mic' ? 'The microphone was not allowed.' : 'Recording was cancelled.'); return; }
+    showError((err && err.message) || String(err));
+    return;
+  }
+  const label = kind === 'mic' ? 'Listening' : 'Recording';
+  let stopping = false;
+  const finish = async () => {
+    if (stopping || !source || !source.rec) return;
+    stopping = true;
+    const rec = source.rec;
+    source.rec = null;
+    const r = await rec.stop();
+    await useRecording(r, title || (kind === 'mic' ? 'Listened recording' : 'Recording'));
+  };
+  const ui = recordingView(label, finish);
+  if (!keepPanel) openPanel(label, ui.view);
+  else panel.append(ui.view);
+  source.ctx = ctx;
+  source.rec = await recordStream(stream, { ctx, onLevel: ui.level, onEnded: finish });
+  source.ctx = null; // owned by the recorder now
+  if (kind === 'mic') ui.hint('Play the song now. The level bar should move with the music.');
+  else ui.hint('Play the song now. If the level bar stays still, no sound is being shared.');
+  return { ui, finish };
+}
+
+async function recordYouTube(L, status) {
+  const player = source && source.player;
+  if (!player) return;
+  const ctx = makeAudioContext();
+  let stream;
+  try {
+    stream = await captureDisplay({ thisTab: true });
+  } catch (err) {
+    ctx.close().catch(() => {});
+    if (err && err.name === 'NotAllowedError') { toast('Recording was cancelled.'); return; }
+    showError((err && err.message) || String(err));
+    return;
+  }
+  let stopping = false, startedAt = -1;
+  const finish = async () => {
+    if (stopping || !source || !source.rec) return;
+    stopping = true;
+    player.pause();
+    const rec = source.rec;
+    source.rec = null;
+    let r = await rec.stop();
+    // anything recorded before the video itself started (an ad, a pause) is cut using the video's length
+    const dur = player.info.duration;
+    if (dur > 5 && r.duration > dur + 2) {
+      const keep = Math.round((dur + 1) * r.sr);
+      r = { left: r.left.slice(r.left.length - keep), right: r.right.slice(r.right.length - keep), sr: r.sr, duration: keep / r.sr };
+    }
+    await useRecording(r, player.info.title || 'YouTube video');
+  };
+  const ui = recordingView('Recording', finish);
+  status.replaceChildren(ui.view);
+  source.rec = await recordStream(stream, { ctx, onLevel: ui.level, onEnded: finish });
+  player.onInfo = (info) => {
+    if (info.state === 1 && startedAt < 0) startedAt = source && source.rec ? source.rec.seconds() : 0;
+    if (info.state === 0) finish(); // ended
+  };
+  player.seek(L.start || 0);
+  player.unmute();
+  player.play();
+  setTimeout(() => { if (player.info.state !== 1 && !stopping) ui.hint('If the video has not started, press play on it.'); }, 3500);
+}
+
+async function useRecording(r, title) {
+  let t = trimSilence(r);
+  if (!t) {
+    openPanel('Nothing was recorded', el('p', { text: 'The recording was silent. Make sure the song is playing and, when sharing a tab, that Share tab audio is on.' }), btnRow(button('Close', closeSource)));
+    return;
+  }
+  if (t.sr !== 44100) {
+    t = { left: resample(t.left, t.sr, 44100), right: resample(t.right, t.sr, 44100), sr: 44100, duration: t.duration };
+    t.duration = t.left.length / 44100;
+  }
+  closeSource();
+  const safe = String(title).replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'Recording';
+  const file = new File([wavBlob([t.left, t.right], 44100)], `${safe}.wav`, { type: 'audio/wav' });
+  setPicked(file, { left: t.left, right: t.right, sr: 44100, duration: t.duration, channels: 2 });
+  toast(`Recorded ${fmtTime(t.duration)}. Press Make the tab.`);
+}
+
 function showError(msg) { const e = $('startError'); e.textContent = msg; e.hidden = false; }
 
 $('fileInput').addEventListener('change', (e) => pickFile(e.target.files[0]));
@@ -300,7 +552,7 @@ function runJob(type, payload, transfer) {
 const buffersOf = (st) => {
   const t = [st.gL.buffer];
   if (st.gR && st.gR !== st.gL) t.push(st.gR.buffer);
-  if (st.rhythm) t.push(st.rhythm.buffer);
+  if (st.mix22) t.push(st.mix22.buffer);
   return t;
 };
 
@@ -356,7 +608,7 @@ async function start(mode = null) {
   // 1. isolate the guitar (its own worker, ended afterwards so the model's memory is freed)
   let st;
   if (opts.isolate === 'off') {
-    st = { gL: left, gR: right, rhythm: null, stereo: !!right, sr, offset, duration: left.length / sr, name };
+    st = { gL: left, gR: right, mix22: null, stereo: !!right, sr, offset, duration: left.length / sr, name };
   } else {
     setRunMarker(marker);
     try {
@@ -619,6 +871,11 @@ async function openProject(project, fresh = false) {
 }
 
 function part() { return state.project.result.parts[state.part]; }
+// "4/4", or "4/4, changes" when the bars found in the song are not all the same length
+function meterLabel(rh) {
+  const lens = rh.bars ? new Set(rh.bars.slice(0, -1).map((b) => b.len)) : null;
+  return `${rh.meter}/4${lens && lens.size > 1 ? ', changes' : ''}`;
+}
 
 function renderHead() {
   const r = state.project.result;
@@ -630,7 +887,7 @@ function renderHead() {
     el('span', { class: 'fact' }, el('span', { class: 'k', text: 'Tuning' }), el('b', { text: tuningName(p.setup.tuning) })),
     el('span', { class: 'fact' }, el('span', { class: 'k', text: 'Capo' }), el('b', { text: p.setup.capo ? `Fret ${p.setup.capo}` : 'None' })),
     el('button', { class: 'fact', type: 'button', onclick: openRhythmDialog, title: 'Change tempo or time signature' },
-      el('span', { class: 'k', text: 'Tempo' }), el('b', { class: 'mono', text: `${Math.round(r.rhythm.bpm)} BPM · ${r.rhythm.meter}/4` })),
+      el('span', { class: 'k', text: 'Tempo' }), el('b', { class: 'mono', text: `${Math.round(r.rhythm.bpm)} BPM · ${meterLabel(r.rhythm)}` })),
   );
   if (r.tuningCents && Math.abs(r.tuningCents) >= 12) {
     f.append(el('span', { class: 'fact' }, el('span', { class: 'k', text: 'Pitch' }), el('b', { text: `${Math.abs(r.tuningCents)} cents ${r.tuningCents < 0 ? 'flat' : 'sharp'}` })));
@@ -856,7 +1113,20 @@ function openRhythmDialog() {
     el('button', { class: 'btn primary', type: 'button', text: 'Apply', onclick: () => {
       pushUndo();
       const nb = Number(bpm.value);
-      if (Number.isFinite(nb) && nb > 20 && Math.abs(nb - r.rhythm.bpm) > 0.05) rescaleBeats(r, nb);
+      const newTempo = Number.isFinite(nb) && nb > 20 && Math.abs(nb - r.rhythm.bpm) > 0.05;
+      const changed = newTempo || Number(meter.value) !== r.rhythm.meter || shift !== 0;
+      const firstBarTime = r.rhythm.bars && r.rhythm.bars.length ? r.rhythm.beats[r.rhythm.bars[0].beat] : null;
+      if (newTempo) rescaleBeats(r, nb);
+      // a hand-set tempo, meter or bar shift means one steady meter from here on, starting
+      // from the first bar line that was found
+      if (changed && r.rhythm.bars) {
+        if (firstBarTime != null && r.rhythm.beats.length) {
+          let bi = 0;
+          r.rhythm.beats.forEach((t, i) => { if (Math.abs(t - firstBarTime) < Math.abs(r.rhythm.beats[bi] - firstBarTime)) bi = i; });
+          r.rhythm.downbeatPhase = bi % Number(meter.value);
+        }
+        r.rhythm.bars = null;
+      }
       r.rhythm.meter = Number(meter.value);
       r.rhythm.downbeatPhase = (((r.rhythm.downbeatPhase || 0) + shift) % r.rhythm.meter + r.rhythm.meter) % r.rhythm.meter;
       close();

@@ -112,7 +112,7 @@ self.onmessage = async (e) => {
       const st = await separateStage(audio, opts, env);
       const transfer = [st.gL.buffer];
       if (st.gR && st.gR !== st.gL) transfer.push(st.gR.buffer);
-      if (st.rhythm) transfer.push(st.rhythm.buffer);
+      if (st.mix22) transfer.push(st.mix22.buffer);
       post('stems', { stems: st, ms: performance.now() - t0, backend, lite }, transfer);
       return;
     }
@@ -122,6 +122,10 @@ self.onmessage = async (e) => {
       ort,
       cancelled: () => cancelled,
       progress: (p) => post('progress', p),
+      getBeatModel: mf.assets.beatModel ? async () => {
+        const bytes = await fetchAsset('beatModel', (f) => post('progress', { stage: 'rhythm', frac: 0, label: `Downloading the beat model (once) · ${Math.round(f * 100)}%` }));
+        return ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+      } : null,
       getBasicPitch: async () => {
         if (basicPitch) return basicPitch;
         const bytes = await fetchAsset('basicpitch');

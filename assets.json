@@ -1,5 +1,5 @@
 {
- "version": "9c06959f9f",
+ "version": "9c2a4b051c",
  "ort": {
   "wasm": "vendor/ort/ort.wasm.bundle.min.mjs",
   "webgpu": "vendor/ort/ort.webgpu.bundle.min.mjs"
@@ -50,6 +50,13 @@
    "sha": "2c3c1d144b",
    "parts": [
     "assets/basic-pitch-2c3c1d144b.0.bin"
+   ]
+  },
+  "beatModel": {
+   "size": 8242836,
+   "sha": "9a5b1158c9",
+   "parts": [
+    "assets/beat-this-9a5b1158c9.0.bin"
    ]
   }
  }
