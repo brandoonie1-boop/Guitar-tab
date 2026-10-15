@@ -170,8 +170,13 @@ export async function hrActivations(ort, model, x16, opts = {}) {
   const Tpad = (nWin - 1) * H + W; // frames the windows cover; past T is silence
   const melAt = (t) => (t < T ? mel.subarray(t * nM, (t + 1) * nM) : null);
   const out = { T, onset: new Float32Array(T * C), offset: new Float32Array(T * C), frame: new Float32Array(T * C), velocity: new Float32Array(T * C) };
-  const chunks = new Map(); // chunk index -> {branch: Float32Array(len * 768)}
   const FEAT = 768;
+  // conv features per chunk, in a small pool of reused buffers (a window spans at most
+  // ceil(W / CH) + 1 chunks): no per-chunk garbage beyond what the runtime returns
+  const chunks = new Map(); // chunk index -> slot
+  const nSlots = Math.ceil(W / CH) + 2;
+  const slots = Array.from({ length: nSlots }, () => ({ free: true, len: 0, f: Object.fromEntries(BRANCHES.map((b) => [b, new Float32Array(CH * FEAT)])) }));
+  const inpBuf = new Float32Array((CH + 2 * K) * nM);
   const runConv = (br, feeds) => (model.runConv ? model.runConv(br, feeds) : model.conv[br].run(feeds));
   // what the convolutions give for silence, computed once; near-silent chunks get this
   let silentFeat = null;
@@ -188,34 +193,32 @@ export async function hrActivations(ort, model, x16, opts = {}) {
     return silentFeat;
   };
   const convChunk = async (c) => {
+    let slot = slots.find((x) => x.free);
+    if (!slot) { slot = { free: true, len: 0, f: Object.fromEntries(BRANCHES.map((b) => [b, new Float32Array(CH * FEAT)])) }; slots.push(slot); }
+    slot.free = false;
     const a = c * CH, b = Math.min(Tpad, a + CH);
+    slot.len = b - a;
     const lo = Math.max(0, a - K), hi = Math.min(Tpad, b + K);
     let silent = true;
     for (let t = lo; t < Math.min(hi, T) && silent; t++) if (loud[t] > quiet) silent = false;
     if (silent) {
       const sf = await silenceFeature();
-      const res = {};
-      for (const br of BRANCHES) {
-        const f = new Float32Array((b - a) * FEAT);
-        for (let t = 0; t < b - a; t++) f.set(sf[br], t * FEAT);
-        res[br] = f;
-      }
-      return res;
+      for (const br of BRANCHES) for (let t = 0; t < b - a; t++) slot.f[br].set(sf[br], t * FEAT);
+      return slot;
     }
-    const inp = new Float32Array((hi - lo) * nM);
+    const inp = inpBuf.subarray(0, (hi - lo) * nM);
     for (let t = lo; t < hi; t++) {
       const row = melAt(t);
       if (row) inp.set(row, (t - lo) * nM); else inp.fill(SILENCE_DB, (t - lo) * nM, (t - lo + 1) * nM);
     }
     const feeds = { mel: new ort.Tensor('float32', inp, [1, hi - lo, nM]) };
-    const res = {};
     for (const br of BRANCHES) {
       const r = await runConv(br, feeds);
       const f = r.feat;
-      res[br] = f.data.slice((a - lo) * FEAT, (b - lo) * FEAT);
+      slot.f[br].set(f.data.subarray((a - lo) * FEAT, (b - lo) * FEAT));
       if (f.dispose) f.dispose();
     }
-    return res;
+    return slot;
   };
   const winFeat = { };
   for (const br of BRANCHES) winFeat[br] = new Float32Array(W * FEAT);
@@ -224,13 +227,14 @@ export async function hrActivations(ort, model, x16, opts = {}) {
     const s = k * H;
     if (silentWindow(s)) { if (onProgress) onProgress((k + 1) / nWin); continue; }
     const c0 = Math.floor(s / CH), c1 = Math.floor((s + W - 1) / CH);
-    for (const key of [...chunks.keys()]) if (key < c0) chunks.delete(key);
+    for (const [key, slot] of [...chunks]) if (key < c0) { slot.free = true; chunks.delete(key); }
     for (let c = c0; c <= c1; c++) if (!chunks.has(c)) chunks.set(c, await convChunk(c));
     for (const br of BRANCHES) {
       const dst = winFeat[br];
       for (let c = c0; c <= c1; c++) {
-        const src = chunks.get(c)[br];
-        const a = Math.max(s, c * CH), b = Math.min(s + W, c * CH + src.length / FEAT);
+        const slot = chunks.get(c);
+        const src = slot.f[br];
+        const a = Math.max(s, c * CH), b = Math.min(s + W, c * CH + slot.len);
         dst.set(src.subarray((a - c * CH) * FEAT, (b - c * CH) * FEAT), (a - s) * FEAT);
       }
     }

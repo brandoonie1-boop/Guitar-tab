@@ -56,6 +56,7 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 |---|---|
 | Notes found, guitar on its own (onset F1, 40 takes) | 90%: chord comping 89.5%, single-note lines 91.6% (basic-pitch, the previous note detector: 79%) |
 | Notes found with drums and bass mixed in, after isolation (16 takes) | 88.7% (basic-pitch: 78.4%) |
+| Notes found on overdriven guitar (GuitarSet run through a simulated amp, 24 takes) | mild 81%, heavy 65% (basic-pitch: 74%, 60%) |
 | String/fret matches what the player used (true notes / transcribed notes with a band) | 80% / 68% |
 | Tuning + capo correct on standard-tuning takes | about 19 in 20 (116 of 120 from the true notes, 15 of 16 transcribed with a band) |
 | DAEABE capo 7 test song (Brave Bird style arpeggios) | tuning and capo right; notes 99% and string/fret 97% for the guitar alone, notes 85% and string/fret 100% for the full band mix |
@@ -68,6 +69,7 @@ Things it cannot know for sure:
 - **The capo.** A capo can't be heard. Many tuning/capo combinations sound exactly the same (standard with capo 2 = D standard with capo 4), and the tab numbers come out identical for those, so you can play it either way. The app picks the most likely setup and shows the others.
 - **Which string.** The same note can often be played in 2–4 places. The fingering is a best guess at what's comfortable; tap a note to move it.
 - **Low guitar notes under a bass guitar** can get pulled into the bass during isolation and go missing.
+- **Heavy distortion on full chords** creates tones nobody played (differences between the chord's notes), and some come out as extra low notes. The tuning and capo are judged only from notes both note detectors agree on, but expect more cleanup on very distorted parts.
 - Two guitars that sit in the middle of the mix can't be pulled apart; they come out as one part.
 
 ## How it works

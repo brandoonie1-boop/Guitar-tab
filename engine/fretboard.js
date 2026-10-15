@@ -94,28 +94,37 @@ function enumerateAssignments(evNotes, notes, setup, costs, maxOut) {
   const used = new Array(NSTR).fill(false);
   function rec(k, cost, nDrop) {
     if (k === evNotes.length) {
-      let mn = 99, mx = -1, lo = 99, hi = -1, placed = 0;
-      const frets = new Set();
+      let mn = 99, mx = -1, lo = 99, hi = -1, placed = 0, fretMask = 0, nFrets = 0;
       for (let j = 0; j < cur.length; j++) {
         const p = cur[j];
         if (!p) continue;
         placed++;
         lo = Math.min(lo, p.s); hi = Math.max(hi, p.s);
-        if (p.f > 0) { mn = Math.min(mn, p.f); mx = Math.max(mx, p.f); frets.add(p.f); }
+        if (p.f > 0) {
+          mn = Math.min(mn, p.f); mx = Math.max(mx, p.f);
+          const bit = 2 ** p.f; // frets up to 22 + capo: fine for a float bit set
+          if (Math.floor(fretMask / bit) % 2 === 0) { fretMask += bit; nFrets++; }
+        }
       }
       let c = cost;
       if (mx >= 0) {
         const span = mx - mn;
         if (span > costs.maxSpan) return;
         if (span > costs.reach) c += costs.stretch * (span - costs.reach) * (span - costs.reach);
-        if (frets.size > 4) c += costs.fingers * (frets.size - 4);
+        if (nFrets > 4) c += costs.fingers * (nFrets - 4);
       }
       if (placed >= 3 && hi > lo) {
         let gaps = 0;
         for (let s = lo; s <= hi; s++) if (!used[s]) gaps++;
         c += costs.stringGap * gaps;
       }
-      results.push({ cost: c, place: cur.slice(), mn: mx >= 0 ? mn : -1, mx });
+      // keep only the maxOut cheapest, in the order a stable sort would give (no garbage for
+      // the many that would be thrown away)
+      if (results.length >= maxOut && c >= results[results.length - 1].cost) return;
+      let at = results.length;
+      while (at > 0 && results[at - 1].cost > c) at--;
+      results.splice(at, 0, { cost: c, place: cur.slice(), mn: mx >= 0 ? mn : -1, mx });
+      if (results.length > maxOut) results.pop();
       return;
     }
     const o = opts[k];
@@ -132,8 +141,7 @@ function enumerateAssignments(evNotes, notes, setup, costs, maxOut) {
     rec(k + 1, cost + dropCost, nDrop + 1);
   }
   rec(0, 0, 0);
-  results.sort((a, b) => a.cost - b.cost);
-  return results.slice(0, maxOut);
+  return results;
 }
 
 // new hand window start given the previous one and the fretted range of the new notes
@@ -157,56 +165,78 @@ export function assignFingering(notes, events, setup, opts = {}) {
   const ringTol = 0.05;
   const evRange = opts.eventRange || [0, events.length];
   let beam = [{ cost: 0, ringEnd: new Float64Array(NSTR).fill(-1), ringFret: new Int8Array(NSTR), ringW: new Float32Array(NSTR), hand: -1, lastT: -10, parent: null, place: null, ev: -1 }];
-  for (let ei = evRange[0]; ei < evRange[1]; ei++) {
-    const ev = events[ei];
-    const assigns = enumerateAssignments(ev.notes, notes, setup, costs, maxAssign);
-    const next = new Map();
-    for (const st of beam) {
-      const dt = Math.max(0, ev.t - st.lastT);
-      const speed = Math.min(2.5, Math.max(0.1, 0.3 / (dt + 0.05)));
-      for (const a of assigns) {
-        let c = st.cost + a.cost;
-        const ringEnd = Float64Array.from(st.ringEnd);
-        const ringFret = Int8Array.from(st.ringFret);
-        const ringW = Float32Array.from(st.ringW);
-        for (let s = 0; s < NSTR; s++) if (ringEnd[s] >= 0 && ringEnd[s] <= ev.t + ringTol) ringEnd[s] = -1;
-        const newOn = [false, false, false, false, false, false];
-        for (let j = 0; j < a.place.length; j++) {
-          const p = a.place[j];
-          if (!p) continue;
-          if (ringEnd[p.s] >= 0) c += costs.cut * Math.min(1, (ringEnd[p.s] - ev.t) / costs.cutTime) * ringW[p.s];
-          const n = notes[ev.notes[j]];
-          ringEnd[p.s] = n.t1;
-          ringFret[p.s] = p.f;
-          ringW[p.s] = 0.5 + 0.5 * Math.min(1, (n.amp ?? 0.4) / 0.4);
-          newOn[p.s] = true;
-        }
-        const hand = moveHand(st.hand, a.mn, a.mx, costs.reach);
-        if (a.mn >= 0 && st.hand >= 0 && hand !== st.hand) {
-          c += (costs.moveBase + costs.move * Math.abs(hand - st.hand)) * speed;
-        }
-        if (a.mn >= 0) {
-          // fretted notes still ringing from before must stay under the hand, or get released
-          for (let s = 0; s < NSTR; s++) {
-            if (ringEnd[s] < 0 || newOn[s] || ringFret[s] === 0) continue;
-            const f = ringFret[s];
-            if (f < hand - 1 || f > hand + costs.reach + 1) {
-              c += costs.cut * 0.6 * Math.min(1, (ringEnd[s] - ev.t) / costs.cutTime) * ringW[s];
-              ringEnd[s] = -1;
-            }
-          }
-        }
-        let key = hand + 1;
-        for (let s = 0; s < NSTR; s++) key = key * 31 + (ringEnd[s] >= 0 ? ringFret[s] + 1 : 0);
-        const prev = next.get(key);
-        if (!prev || prev.cost > c) {
-          next.set(key, { cost: c, ringEnd, ringFret, ringW, hand, lastT: ev.t, parent: st, place: a.place, ev: ei });
+  // Every (state, assignment) pair is scored in scratch buffers; only the states that make it
+  // into the next beam get arrays of their own (JavaScriptCore in particular is slow to
+  // collect millions of short-lived typed arrays, which made memory spike on iPhones).
+  const sEnd = new Float64Array(NSTR), sFret = new Int8Array(NSTR), sW = new Float32Array(NSTR), sNew = new Uint8Array(NSTR);
+  let cap = 0, cCost = null, cKey = null, cSt = null, cA = null;
+  // advance state st by assignment a of event ev into the scratch buffers; returns the cost
+  const advance = (st, a, ev) => {
+    const dt = Math.max(0, ev.t - st.lastT);
+    const speed = Math.min(2.5, Math.max(0.1, 0.3 / (dt + 0.05)));
+    let c = st.cost + a.cost;
+    sEnd.set(st.ringEnd); sFret.set(st.ringFret); sW.set(st.ringW); sNew.fill(0);
+    for (let s = 0; s < NSTR; s++) if (sEnd[s] >= 0 && sEnd[s] <= ev.t + ringTol) sEnd[s] = -1;
+    for (let j = 0; j < a.place.length; j++) {
+      const p = a.place[j];
+      if (!p) continue;
+      if (sEnd[p.s] >= 0) c += costs.cut * Math.min(1, (sEnd[p.s] - ev.t) / costs.cutTime) * sW[p.s];
+      const n = notes[ev.notes[j]];
+      sEnd[p.s] = n.t1;
+      sFret[p.s] = p.f;
+      sW[p.s] = 0.5 + 0.5 * Math.min(1, (n.amp ?? 0.4) / 0.4);
+      sNew[p.s] = 1;
+    }
+    const hand = moveHand(st.hand, a.mn, a.mx, costs.reach);
+    if (a.mn >= 0 && st.hand >= 0 && hand !== st.hand) {
+      c += (costs.moveBase + costs.move * Math.abs(hand - st.hand)) * speed;
+    }
+    if (a.mn >= 0) {
+      // fretted notes still ringing from before must stay under the hand, or get released
+      for (let s = 0; s < NSTR; s++) {
+        if (sEnd[s] < 0 || sNew[s] || sFret[s] === 0) continue;
+        const f = sFret[s];
+        if (f < hand - 1 || f > hand + costs.reach + 1) {
+          c += costs.cut * 0.6 * Math.min(1, (sEnd[s] - ev.t) / costs.cutTime) * sW[s];
+          sEnd[s] = -1;
         }
       }
     }
-    beam = Array.from(next.values()).sort((x, y) => x.cost - y.cost).slice(0, beamWidth);
-    // free memory of long parent chains when only cost matters
-    if (opts.costOnly) for (const st of beam) st.parent = null;
+    advance.hand = hand;
+    return c;
+  };
+  const scratchKey = (hand) => {
+    let key = hand + 1;
+    for (let s = 0; s < NSTR; s++) key = key * 31 + (sEnd[s] >= 0 ? sFret[s] + 1 : 0);
+    return key;
+  };
+  for (let ei = evRange[0]; ei < evRange[1]; ei++) {
+    const ev = events[ei];
+    const assigns = enumerateAssignments(ev.notes, notes, setup, costs, maxAssign);
+    const n = beam.length * assigns.length;
+    if (n > cap) { cap = n; cCost = new Float64Array(n); cKey = new Float64Array(n); cSt = new Int32Array(n); cA = new Int32Array(n); }
+    // best candidate per state key, keys in order of first appearance (as a Map keeps them)
+    const bestOf = new Map();
+    let k = 0;
+    for (let si = 0; si < beam.length; si++) {
+      const st = beam[si];
+      for (let ai = 0; ai < assigns.length; ai++, k++) {
+        const c = advance(st, assigns[ai], ev);
+        const key = scratchKey(advance.hand);
+        cCost[k] = c; cKey[k] = key; cSt[k] = si; cA[k] = ai;
+        const prev = bestOf.get(key);
+        if (prev === undefined || cCost[prev] > c) bestOf.set(key, k);
+      }
+    }
+    const order = Array.from(bestOf.values()).sort((x, y) => cCost[x] - cCost[y]);
+    const next = [];
+    for (let i = 0; i < Math.min(beamWidth, order.length); i++) {
+      const j = order[i];
+      const st = beam[cSt[j]], a = assigns[cA[j]];
+      const c = advance(st, a, ev);
+      next.push({ cost: c, ringEnd: Float64Array.from(sEnd), ringFret: Int8Array.from(sFret), ringW: Float32Array.from(sW), hand: advance.hand, lastT: ev.t, parent: opts.costOnly ? null : st, place: a.place, ev: ei });
+    }
+    beam = next;
   }
   const best = beam[0];
   if (opts.costOnly) return { cost: best.cost };

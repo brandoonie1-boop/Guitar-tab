@@ -98,9 +98,16 @@ export async function detectNotes(env, mono44, opts, cents, onProgress) {
       return { s, e: Math.min(last + 1, Math.max(s + 1, Math.round(timeToFrame(n.t1)))), pitch: n.pitch, note: n };
     });
     addPitchBends(model, framed);
+    // how strongly basic-pitch hears the same note (distortion makes the transcription model
+    // hear confident "ghost" notes, e.g. difference tones below the chord, that it doesn't)
+    const support = (s, pitch) => {
+      let v = 0;
+      for (let t = Math.max(0, s - 3); t <= Math.min(model.nT - 1, s + 3); t++) v = Math.max(v, model.note[t * nF + (pitch - 21)]);
+      return v;
+    };
     return framed.map((f) => ({
       t0: f.note.t0 * r, t1: f.note.t1 * r, pitch: f.pitch, amp: f.note.amp, velocity: f.note.velocity,
-      bends: f.bends, onsetProb: onsetAt(f.s, f.pitch), hr: true,
+      bends: f.bends, onsetProb: onsetAt(f.s, f.pitch), hr: true, conf: f.note.onsetProb, support: support(f.s, f.pitch),
     }));
   }
   const minLen = Math.max(3, Math.round((opts.minNoteMs / 1000) * (BP.sr / BP.hop)));
@@ -252,7 +259,10 @@ export async function analyzeStage(stems, userOpts = {}, env) {
   // 5. tuning + capo per part, then fingering
   for (let pi = 0; pi < parts.length; pi++) {
     const p = parts[pi];
-    const rank = rankSetups(p.notes, {
+    // the tuning and capo are judged from the notes both detectors agree on (or that the
+    // transcription model is sure of), so a few distortion ghosts can't drag them down
+    const sure = p.notes.filter((n) => !(n.hr && (n.support ?? 1) < 0.2 && (n.conf ?? 1) < 0.7));
+    const rank = rankSetups(sure.length >= 0.5 * p.notes.length ? sure : p.notes, {
       tuning: opts.tuning || undefined,
       capo: opts.capo ?? undefined,
       preferTunings: opts.preferTunings,
