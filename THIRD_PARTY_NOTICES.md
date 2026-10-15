@@ -2,7 +2,8 @@
 
 | Component | Used for | License |
 |---|---|---|
-| [Demucs](https://github.com/adefossez/demucs) `htdemucs_6s` weights and model code (Meta AI / Alexandre Défossez) | guitar isolation (`assets/demucs-6s-*.bin`, exported to ONNX) | MIT |
+| [Demucs](https://github.com/adefossez/demucs) `htdemucs_6s` weights and model code (Meta AI / Alexandre Défossez) | guitar isolation (`assets/demucs-*.bin`, exported to ONNX as a chain of parts) | MIT |
+| [Beat This!](https://github.com/CPJKU/beat_this) small model (Foscarin, Schlüter, Widmer; Johannes Kepler University Linz) | beats and bar lines (`assets/beat-this-*.bin`, exported to ONNX); `engine/beatthis.js` reproduces its log-mel front end and peak picking | MIT, Copyright 2024 Institute of Computational Perception, JKU Linz |
 | [basic-pitch](https://github.com/spotify/basic-pitch) (Spotify) | note detection model (`assets/basic-pitch-*.bin`); `engine/basicpitch.js` ports its note-creation code | Apache License 2.0 |
 | [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (Microsoft) | running the models (`vendor/ort/`, `assets/ort-wasm*.bin`) | MIT |
 | [alphaTab](https://github.com/CoderLine/alphaTab) (Daniel Kuschny and contributors) | tab rendering, playback, Guitar Pro export (`vendor/alphatab/`) | Mozilla Public License 2.0 |

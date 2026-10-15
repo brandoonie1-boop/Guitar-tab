@@ -1,10 +1,10 @@
 # Guitar Tab
 
-Turn any song into guitar tab. Drop in an audio or video file and the app:
+Turn any song into guitar tab. Drop in an audio or video file, paste a link, or record the song while it plays, and the app:
 
 1. pulls the guitar out of the mix (and splits two guitars that are panned left/right),
 2. hears the notes, including bends,
-3. finds the beat and the bar lines,
+3. finds the beat and the bar lines (including songs that change meter),
 4. works out the tuning, the capo position and how far the recording is from A440,
 5. picks strings and frets the way a player would, and writes the tab.
 
@@ -21,6 +21,13 @@ The first song downloads about 80 MB of models and engine files once (about 95 M
 
 ## Using it
 
+- **Get a song in:**
+  - *Choose a file*: any audio or video file (MP3, M4A, WAV, FLAC, a phone video...).
+  - *Paste a link* to an audio/video file and it downloads (if the site allows it).
+  - *YouTube link* (computer, Chrome or Edge): the video opens inside the app; press *Record the song*, choose *This tab* and keep *Share tab audio* on. The video plays from the start and the recording stops when it ends. YouTube doesn't let apps download its audio, so the app records it while it plays.
+  - *Spotify, SoundCloud, Bandcamp and other pages* (computer): open the song in another tab, press *Record*, and pick that tab with tab audio on (or on Windows, *Entire screen* with *Share system audio* for a desktop app).
+  - *On iPhone*: use iPhone *Screen Recording* while the song plays in its app, then pick the recording with *Choose a file*. Or press *Record* / *Listen* and let the phone hear the song playing on another device or speaker.
+  - Recordings stay on your device. Only record music you're allowed to use.
 - **Make the tab:** choose a file, then *Make the tab*. A 3-minute song takes roughly 2–5 minutes on a laptop and longer on a phone. Pick a section (*Part of the song*) to go faster. On a phone, keep the screen on while it works.
 - **Tuning and capo:** the best match is shown with other possibilities and how likely each one is. Tap another one and the whole tab is re-fingered for it. Add the tunings you play to *Tunings you use* so they get picked more readily.
 - **Tempo and bars:** tap the tempo to fix half-time / double-time mix-ups or shift where bars start.
@@ -52,7 +59,8 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 | String/fret matches what the player used (true notes / transcribed notes) | 75% / 70% |
 | Tuning + capo correct on standard-tuning takes | about 19 in 20 |
 | Tuning + capo correct on test riffs in DAEABE, FACGCE, open D, drop D, Eb, capo 2/3/7 | 9 of 10 (DADGAD capo 2 was mistaken for standard) |
-| Tempo correct (with drums) | 32 of 40 takes; the rest were half or double speed, fixable with one tap |
+| Tempo correct (with drums and bass) | 37 of 40 takes (was 32 before the beat model); beat F-measure 0.98 |
+| Bar lines (downbeats) in the right place | F-measure 0.78 (was 0.30) |
 
 Things it cannot know for sure:
 
@@ -68,7 +76,7 @@ Things it cannot know for sure:
 | Guitar isolation | [Demucs v4](https://github.com/adefossez/demucs) `htdemucs_6s` (has a dedicated guitar stem), exported to ONNX with the STFT done in JS. To fit in a phone's memory the model runs as a chain of 13 small graphs (encoder layers, transformer, decoder layers; the outer layers' frequency and time branches separately), the outer layers work through the spectrogram in bands, attention is computed in blocks, and only the stems that are needed come back. Same maths as the original: the engine needs about 450 MB instead of 2 GB (260 MB for the light model, which uses 3.9 s segments instead of 7.8 s). Runs on the graphics chip (WebGPU) when there is one, checks its output, and falls back to the processor. |
 | Two guitars | stereo-position split of the guitar stem |
 | Notes | Spotify [basic-pitch](https://github.com/spotify/basic-pitch) (ONNX) + a JS port of its note decoding, thresholds re-tuned on GuitarSet |
-| Tempo / beats | onset envelope + dynamic-programming beat tracker |
+| Beats and bar lines | [Beat This!](https://github.com/CPJKU/beat_this) small model (ISMIR 2024) on the mix, with its log-mel front end in JS; bar lines by a Viterbi over bar lengths 3–7 scored by its downbeat output (falls back to an onset-envelope tracker) |
 | Pitch reference | spectral peak histogram (cents from A440); corrected before note detection |
 | Strings, frets, tuning, capo | beam search over hand positions, ringing strings, stretches and open strings; every candidate tuning × capo is scored by how naturally the music lays out on it |
 | Rendering, playback, Guitar Pro | [alphaTab](https://www.alphatab.net/) |
