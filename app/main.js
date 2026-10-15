@@ -224,10 +224,18 @@ $('linkInput').addEventListener('paste', () => setTimeout(() => {
 }, 0));
 $('recordBtn').addEventListener('click', () => recordPanel());
 
+// Inside the Claude app the page can't record or reach other sites: send people to the app.
+function artifactPanel(what) {
+  const a = el('a', { href: APP_URL, target: '_blank', rel: 'noopener', text: 'guitar-tab.onrender.com' });
+  openPanel(what, el('p', {}, document.createTextNode('This works in the installable version of the app: '), a,
+    document.createTextNode('. There you can paste YouTube and other links, record what is playing, or listen with the microphone. Here inside Claude, use Choose a file.')), btnRow(button('Close', closeSource)));
+}
+
 function useLink(text) {
   $('startError').hidden = true;
   const L = classifyLink(text);
   if (L.kind === 'invalid') { showError("That doesn't look like a link. Copy the whole address, starting with https://"); return; }
+  if (ARTIFACT && L.kind !== 'direct') { artifactPanel(L.kind === 'youtube' ? 'YouTube' : (L.service || 'Links')); return; }
   if (L.kind === 'direct') { downloadLink(L); return; }
   if (L.kind === 'youtube') { youtubePanel(L); return; }
   streamPanel(L);
@@ -307,6 +315,7 @@ function phonePanel(L, service, why = '') {
 }
 
 function recordPanel() {
+  if (ARTIFACT) { artifactPanel('Recording'); return; }
   if (canCaptureTab()) {
     openPanel('Record what is playing',
       el('p', { text: 'Press Start, then choose the tab that plays the song with Share tab audio on (or Entire screen with Share system audio on, for a desktop app). Play the song from the start and press Stop when it ends.' }),
