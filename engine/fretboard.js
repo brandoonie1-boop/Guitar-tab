@@ -26,6 +26,9 @@ export const FINGER_COSTS = {
   fingers: 2.5, // per finger needed beyond 4
   stringGap: 0.7, // per skipped string inside a chord of 3+ notes
   maxAbsFret: 22,
+  // with a capo or an open/alternate tuning players lean on the open strings (that is what
+  // the tuning or capo is for): fretting a note that could ring open costs this much there
+  openBias: 0.1,
 };
 
 // Setup detection fingers the notes with the same profile (plus a slight tie-break toward
@@ -36,6 +39,12 @@ export const DETECT_WEIGHTS = { cost: 1.0, prior: 0.7, open: 1.0, openTime: 0.0,
 export const DEFAULT_COSTS = FINGER_COSTS;
 
 const NSTR = 6;
+
+// standard tuning or a whole-instrument transposition of it (Eb, D, B standard...)
+function standardFamily(tuning) {
+  for (let i = 1; i < NSTR; i++) if (tuning[i] - tuning[i - 1] !== STANDARD[i] - STANDARD[i - 1]) return false;
+  return true;
+}
 
 /** Group notes into attack events (notes starting together). */
 export function buildEvents(notes, chordWindow = 0.045) {
@@ -142,6 +151,7 @@ function moveHand(prev, mn, mx, reach) {
  */
 export function assignFingering(notes, events, setup, opts = {}) {
   const costs = { ...FINGER_COSTS, ...(opts.costs || {}) };
+  if (!(opts.costs && opts.costs.fretted != null) && (setup.capo > 0 || !standardFamily(setup.tuning))) costs.fretted = costs.openBias;
   const beamWidth = opts.beam ?? 48;
   const maxAssign = opts.maxAssign ?? 40;
   const ringTol = 0.05;

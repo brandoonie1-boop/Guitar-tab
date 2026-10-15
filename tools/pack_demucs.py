@@ -16,6 +16,9 @@ Output:
                           "tensors": [[src offset, src bytes, dst offset, "h"=f16->f32 | "c"=copy], ...]}
 
 usage: python tools/pack_demucs.py --out models/packed models/chain343980 models/chain171990
+       python tools/pack_demucs.py --out models/packed --weights hrgt.weights.bin --name hrgt.chain --f16 models/hrgt
+       (--f16 stores every float32 weight as float16 even when that rounds it; --name sets
+        the chain file name for a single chain)
 """
 import argparse
 import hashlib
@@ -40,6 +43,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
     ap.add_argument('--suffix', default='.opt.onnx', help='part files to pack (float32 initializers)')
+    ap.add_argument('--weights', default=WEIGHTS, help='name of the shared weights file')
+    ap.add_argument('--name', help='chain file name (one chain only)')
+    ap.add_argument('--f16', action='store_true', help='round float32 weights to float16 (lossy)')
     ap.add_argument('chains', nargs='+')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -65,7 +71,7 @@ def main():
                 src = raw
                 if arr.dtype == np.float32:
                     h = arr.astype(np.float16)
-                    if np.array_equal(h.astype(np.float32), arr, equal_nan=True):
+                    if a.f16 or np.array_equal(h.astype(np.float32), arr, equal_nan=True):
                         kind, src = 'h', h.tobytes()
                 key = hashlib.sha1(kind.encode() + str(arr.dtype).encode() + str(list(arr.shape)).encode() + src).hexdigest()
                 if key not in index:
@@ -89,14 +95,14 @@ def main():
             blobs.append(blob)
             offset += len(blob)
         header = {k: v for k, v in chain.items() if k != 'parts'}
-        header['weights'] = WEIGHTS
+        header['weights'] = a.weights
         header['parts'] = parts
         hb = json.dumps(header, separators=(',', ':')).encode()
-        out = os.path.join(a.out, f"demucs-{chain['segment']}.chain")
+        out = os.path.join(a.out, a.name or f"demucs-{chain['segment']}.chain")
         with open(out, 'wb') as f:
             f.write(b'DMCH' + struct.pack('<I', len(hb)) + hb + b''.join(blobs))
         print(out, os.path.getsize(out) // 1000, 'kB')
-    out = os.path.join(a.out, WEIGHTS)
+    out = os.path.join(a.out, a.weights)
     with open(out, 'wb') as f:
         f.write(weights)
     print(out, len(weights) // 1000, 'kB;', stats['h'], 'float16 tensors,', stats['c'], 'stored as is')

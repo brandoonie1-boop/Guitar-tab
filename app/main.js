@@ -1,7 +1,7 @@
 // Guitar Tab - app controller.
 import { TUNINGS, tuningName, STANDARD } from '../engine/tunings.js';
 import { midiName } from '../engine/dsp.js';
-import { applySetup, layout, docOf } from '../engine/pipeline.js';
+import { applySetup, layout, docOf, STAGES } from '../engine/pipeline.js';
 import { toMidi } from '../engine/export.js';
 import { decodeFile, wavBlob, makeZip, saveFile, copyText, inArtifact } from './files.js';
 import {
@@ -63,6 +63,8 @@ const caps = {
 
 const IS_PHONE = /iPhone|iPod|Android.+Mobile/.test(navigator.userAgent);
 const DEBUG = /[?&]debug\b/.test(location.search);
+// tests only: ?forcegpu uses a software graphics adapter too (it is normally skipped as too slow)
+const FORCE_GPU = /[?&]forcegpu\b/.test(location.search);
 // Phones and small-memory computers default to the light isolation model: on GuitarSet with a
 // band mixed in it found the same notes (F1 77.7 vs 77.9) with about 40% less engine memory.
 const DEFAULT_MODEL = IS_PHONE || (navigator.deviceMemory && navigator.deviceMemory <= 4) ? 'lite' : 'full';
@@ -138,6 +140,7 @@ function readOpts() {
   o.split = $('optSplit').value;
   o.quality = $('optQuality').value;
   o.model = $('optModel').value;
+  o.notes = $('optNotes').value;
   const a = parseTime($('rangeFrom').value), b = parseTime($('rangeTo').value);
   o.range = null;
   if (a != null || b != null) {
@@ -459,7 +462,9 @@ $('navLibrary').addEventListener('click', () => { stopPlayback(); show('screenSt
 
 /* ---------------- processing ---------------- */
 const STEP_ORDER = ['load', 'separate', 'rhythm', 'split', 'notes', 'setup', 'tab'];
-let workStart = 0, sepStart = 0, lastFrac = 0;
+let workStart = 0, lastFrac = 0;
+const stageClock = {}; // stage -> performance.now() when it started (for the time left)
+const STAGE_SPAN = (() => { const o = {}; let a = 0; for (const [k, w] of STAGES) { o[k] = [a, w]; a += w; } return o; })();
 
 function setStep(stage) {
   const idx = STEP_ORDER.indexOf(stage === 'prepare' ? 'load' : stage);
@@ -476,12 +481,14 @@ function onProgress(p) {
   $('workBar').style.width = `${(100 * Math.max(0.01, lastFrac)).toFixed(1)}%`;
   let txt = p.label || '';
   if (p.stage === 'load' && p.frac > 0) txt += ` · ${Math.round(p.frac * 100)}%`;
-  if (p.stage === 'separate') {
-    if (!sepStart) sepStart = performance.now();
-    const el2 = (performance.now() - sepStart) / 1000;
-    const sepFrac = (lastFrac - 0.02) / 0.62;
-    if (sepFrac > 0.08) {
-      const remain = (el2 / sepFrac) * (1 - sepFrac) * 1.25;
+  // the two long stages say how long they still need
+  if (p.stage === 'separate' || p.stage === 'notes') {
+    if (!stageClock[p.stage]) stageClock[p.stage] = performance.now();
+    const el2 = (performance.now() - stageClock[p.stage]) / 1000;
+    const [s0, w] = STAGE_SPAN[p.stage];
+    const f = (p.frac - s0) / w;
+    if (f > 0.08 && f < 1) {
+      const remain = (el2 / f) * (1 - f) * 1.15;
       txt += ` · about ${remain > 90 ? Math.round(remain / 60) + ' min' : Math.max(5, Math.round(remain / 5) * 5) + ' s'} left`;
     }
   }
@@ -517,6 +524,8 @@ function setRunMarker(v) { try { if (v) localStorage.setItem(RUN_KEY, JSON.strin
 function getRunMarker() { try { return JSON.parse(localStorage.getItem(RUN_KEY) || 'null'); } catch { return null; } }
 function modelPref() { try { return localStorage.getItem('gt-model') || DEFAULT_MODEL; } catch { return DEFAULT_MODEL; } }
 function setModelPref(v) { try { localStorage.setItem('gt-model', v); } catch { /* ignore */ } $('optModel').value = v; }
+function notesPref() { try { return localStorage.getItem('gt-notes') || 'hr'; } catch { return 'hr'; } }
+function setNotesPref(v) { try { localStorage.setItem('gt-notes', v); } catch { /* ignore */ } $('optNotes').value = v; }
 function setGpuPref(v) { try { localStorage.setItem('gt-gpu', v); } catch { /* ignore */ } $('optGpu').value = v; }
 const looksLikeMemory = (msg) => /memory|oom|allocation|array buffer|rangeerror|aborted|out of bounds/i.test(msg || '');
 
@@ -572,6 +581,7 @@ async function start(mode = null) {
     mode = {
       gpu: !$('gpuRow').hidden && $('optGpu').value === 'on',
       lite: opts.model === 'lite',
+      notes: opts.notes,
       // each engine thread costs memory too; phones gain little from more than 4
       threads: IS_PHONE ? 4 : 8,
     };
@@ -580,7 +590,8 @@ async function start(mode = null) {
   $('workTitle').textContent = `Working on ${state.file.name}`;
   $('workBar').style.width = '1%';
   $('workStatus').textContent = 'Reading the file';
-  lastFrac = 0; sepStart = 0; workStart = performance.now();
+  lastFrac = 0; workStart = performance.now();
+  for (const k of Object.keys(stageClock)) delete stageClock[k];
   setStep('load');
   keepAwake(true);
   if (state.job) state.job.cancel();
@@ -607,13 +618,15 @@ async function start(mode = null) {
   const sr = a.sr, name = state.file.name;
   a = null;
   const runOpts = {
-    threads: mode.threads, gpu: mode.gpu, lite: mode.lite,
+    threads: mode.threads, gpu: mode.gpu, lite: mode.lite, notesModel: mode.notes || 'hr',
     isolate: opts.isolate, split: opts.split, tuning: opts.tuning, capo: opts.capo, range: null,
     overlap: opts.quality === 'fast' ? 0.1 : 0.25,
+    hrHop: opts.quality === 'fast' ? 750 : 500,
     preferTunings: favoriteTunings(),
     debugMem: DEBUG,
+    forceGpu: FORCE_GPU,
   };
-  const marker = { t: Date.now(), gpu: mode.gpu, lite: mode.lite, name, phase: 'separate', hidden: document.visibilityState === 'hidden' };
+  const marker = { t: Date.now(), gpu: mode.gpu, lite: mode.lite, notes: mode.notes || 'hr', name, phase: 'separate', hidden: document.visibilityState === 'hidden' };
   // 1. isolate the guitar (its own worker, ended afterwards so the model's memory is freed)
   let st;
   if (opts.isolate === 'off') {
@@ -687,6 +700,12 @@ function runFailed(mode, m, phase) {
       return;
     }
   }
+  if (phase === 'analyze' && memory && (mode.notes || 'hr') !== 'basic') {
+    setNotesPref('basic');
+    toast('Ran out of memory while finding the notes. Trying again with the light note detection.');
+    start({ ...mode, notes: 'basic' });
+    return;
+  }
   keepAwake(false);
   show('screenStart');
   const tip = memory ? ' This device ran out of memory. Pick a shorter part of the song below and try again.' : '';
@@ -702,6 +721,9 @@ function checkLastRun() {
   let msg;
   if (r.hidden) {
     msg = `The last run (${r.name}) stopped when the app went into the background. Keep the screen on and the app open until it finishes.`;
+  } else if (r.phase === 'analyze' && r.notes !== 'basic') {
+    setNotesPref('basic');
+    msg = `The last run (${r.name}) stopped while finding the notes, most likely because the browser ran out of memory. The light note detection is now selected below (or pick a shorter part of the song).`;
   } else if (r.phase === 'analyze') {
     msg = `The last run (${r.name}) stopped while writing the tab, most likely because the browser ran out of memory. Pick a shorter part of the song below, or close other apps and tabs, then try again.`;
   } else if (r.gpu) {
@@ -1339,6 +1361,8 @@ fillSelects();
 setupGpuRow();
 $('optModel').value = modelPref();
 $('optModel').addEventListener('change', () => setModelPref($('optModel').value));
+$('optNotes').value = notesPref();
+$('optNotes').addEventListener('change', () => setNotesPref($('optNotes').value));
 checkLastRun();
 fillFavAdd();
 renderFavorites();

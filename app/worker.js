@@ -4,7 +4,8 @@
 // the memory it used (the engine's WebAssembly memory can only grow, never shrink) is given
 // back before the next part starts.
 import { separateStage, analyzeStage } from '../engine/pipeline.js';
-import { parseChain, loadChain } from '../engine/demucs.js';
+import { parseChain, loadChain, loadParts } from '../engine/demucs.js';
+import { hrModel } from '../engine/hrgt.js';
 import { encodeWav } from '../engine/wav.js';
 import { fetchAsset, getManifest, baseUrl } from './assets.js';
 
@@ -70,14 +71,18 @@ self.onmessage = async (e) => {
   let useGpu = false;
   try {
     const mf = await getManifest();
-    useGpu = msg.type === 'separate' && !!opts.gpu && !!mf.ort.webgpu && !!mf.assets.ortWasmGpu && (await hardwareGpu());
+    // the graphics chip runs the guitar isolation, and the note model's convolutions
+    const gpuJob = msg.type === 'separate' || (opts.notesModel !== 'basic' && !!mf.assets.hrgtWeights);
+    useGpu = gpuJob && !!opts.gpu && !!mf.ort.webgpu && !!mf.assets.ortWasmGpu && (opts.forceGpu ? !!self.navigator.gpu : await hardwareGpu());
     const threads = self.crossOriginIsolated ? Math.max(1, Math.min(opts.threads || 8, navigator.hardwareConcurrency || 4)) : 1;
     let ort;
     try {
       ort = await loadOrt(useGpu, threads);
     } catch (err) {
-      if (useGpu) throw gpuFailed(err);
-      throw err;
+      // the note model only uses the chip for speed: carry on with the processor engine
+      if (useGpu && msg.type === 'analyze') { useGpu = false; ort = await loadOrt(false, threads); }
+      else if (useGpu) throw gpuFailed(err);
+      else throw err;
     }
     const backend = useGpu ? 'webgpu' : `wasm x${threads}`;
     if (msg.type === 'separate') {
@@ -117,7 +122,7 @@ self.onmessage = async (e) => {
       return;
     }
     // analyze
-    let basicPitch = null;
+    let basicPitch = null, transcriber = null;
     const env = {
       ort,
       cancelled: () => cancelled,
@@ -132,6 +137,30 @@ self.onmessage = async (e) => {
         basicPitch = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] });
         return basicPitch;
       },
+      // the guitar transcription model (most of the note accuracy); basic-pitch alone if missing
+      getTranscriber: mf.assets.hrgtWeights && opts.notesModel !== 'basic' ? async () => {
+        if (transcriber) return transcriber;
+        const weights = await fetchAsset('hrgtWeights', (f) => post('progress', { stage: 'notes', frac: 0, label: `Downloading the note model (once) · ${Math.round(f * 100)}%` }));
+        const chain = parseChain(await fetchAsset('hrgtChain'));
+        const cpu = { executionProviders: ['wasm'], graphOptimizationLevel: 'all' };
+        if (useGpu) {
+          // convolutions on the graphics chip, checked against (and backed up by) a copy on
+          // the processor; the recurrent head runs on the processor
+          let parts = null;
+          try {
+            parts = await loadParts(ort, chain, weights, (p) => (p.file.startsWith('conv_') ? { executionProviders: ['webgpu'], graphOptimizationLevel: 'all' } : cpu));
+            const cpuConv = await loadParts(ort, chain, weights, (p) => (p.file.startsWith('conv_') ? cpu : null));
+            transcriber = hrModel(parts, cpuConv);
+            console.info('note model: convolutions on the GPU');
+            return transcriber;
+          } catch {
+            // fall through to the processor
+            if (parts) for (const p of parts) { try { await p.session.release(); } catch { /* ignore */ } }
+          }
+        }
+        transcriber = hrModel(await loadParts(ort, chain, weights, cpu));
+        return transcriber;
+      } : null,
     };
     const stems = msg.stems;
     msg.stems = null;

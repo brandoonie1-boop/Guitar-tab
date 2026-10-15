@@ -329,6 +329,14 @@ button.fact:hover { border-color: var(--accent); }
         <div class="help">The light model needs about a third less memory and separates a little less cleanly. The app switches to it by itself if a run runs out of memory.</div>
       </div>
       <div class="setting">
+        <label for="optNotes">Note detection</label>
+        <select id="optNotes">
+          <option value="hr">Accurate (guitar transcription model)</option>
+          <option value="basic">Light (less memory, less accurate)</option>
+        </select>
+        <div class="help">The accurate model finds about 90% of the notes on real guitar recordings (the light one about 80%) and downloads 40 MB once. The app switches to the light one by itself if a run runs out of memory.</div>
+      </div>
+      <div class="setting">
         <label for="optQuality">Speed</label>
         <select id="optQuality">
           <option value="best">Best quality</option>
@@ -420,6 +428,6 @@ button.fact:hover { border-color: var(--accent); }
   </div>
 </div>
 
-<script type="module" src="app/main.js?v=eff43ba8bf"></script>
+<script type="module" src="app/main.js?v=0d2f402bbf"></script>
 </body>
 </html>

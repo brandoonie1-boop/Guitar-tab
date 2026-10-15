@@ -39,6 +39,9 @@ const assets = {
   demucsFull: chunkFile(r('models/demucs-343980.chain'), 'demucs-full'),
   demucsLite: chunkFile(r('models/demucs-171990.chain'), 'demucs-lite'),
   basicpitch: chunkFile(r('models/basic_pitch.onnx'), 'basic-pitch'),
+  // notes: high-resolution guitar transcription (Riley et al., MIT), tools/export_hrgt.py
+  hrgtWeights: chunkFile(r('models/hrgt.weights.bin'), 'hrgt-weights'),
+  hrgtChain: chunkFile(r('models/hrgt.chain'), 'hrgt-chain'),
   // beats and bar lines: Beat This! small (CPJKU, MIT), tools/export_beat_this.py
   beatModel: chunkFile(r('models/beat_this_small.f16.onnx'), 'beat-this'),
 };
@@ -130,6 +133,8 @@ const artAssets = {
   demucsFull: b64Asset(r('models/demucs-343980.chain'), 'demucs-full'),
   demucsLite: b64Asset(r('models/demucs-171990.chain'), 'demucs-lite'),
   basicpitch: b64Asset(r('models/basic_pitch.onnx'), 'basic-pitch'),
+  hrgtWeights: b64Asset(r('models/hrgt.weights.bin'), 'hrgt-weights'),
+  hrgtChain: b64Asset(r('models/hrgt.chain'), 'hrgt-chain'),
   beatModel: b64Asset(r('models/beat_this_small.f16.onnx'), 'beat-this'),
   soundfont: b64Asset(r('vendor/alphatab/soundfont/sonivox.sf3'), 'soundfont'),
 };

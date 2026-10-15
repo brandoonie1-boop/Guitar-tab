@@ -1,6 +1,7 @@
 // End-to-end: audio -> isolated guitar -> notes -> tuning/capo -> tab.
 import { separate, DEMUCS } from './demucs.js';
-import { runModel, outputToNotes, addPitchBends, frameTime, BP } from './basicpitch.js';
+import { runModel, outputToNotes, addPitchBends, frameTime, timeToFrame, BP } from './basicpitch.js';
+import { HR, hrActivations, hrNotes } from './hrgt.js';
 import { resample, toMono, rms } from './dsp.js';
 import { analyzeRhythm, envSampler } from './beats.js';
 import { beatActivations, beatsAndBars, BT } from './beatthis.js';
@@ -21,7 +22,13 @@ export const DEFAULT_OPTS = {
   bpm: null,
   meter: null,
   range: null,
-  // note detection thresholds tuned on GuitarSet (onset F1 0.768 -> 0.815)
+  // notes: 'hr' = the guitar transcription model when it is available, 'basic' = basic-pitch
+  notesModel: 'hr',
+  hrHop: 500, // frames between the model's 10 s windows (500 = half overlap, as trained)
+  hrOnset: 0.4, // onset threshold (GuitarSet onset F1 89.5 at 0.3, 90.2 at 0.4)
+  hrOffset: 0.3,
+  hrFrame: 0.1,
+  // basic-pitch note thresholds tuned on GuitarSet (onset F1 0.768 -> 0.815)
   onsetThresh: 0.6,
   frameThresh: 0.4,
   minNoteMs: 58, // 6+ frames; same F1 as 8+ on GuitarSet but keeps fast 16ths
@@ -31,8 +38,10 @@ export const DEFAULT_OPTS = {
   preferTunings: [],
 };
 
-const STAGES = [
-  ['prepare', 0.02], ['separate', 0.62], ['rhythm', 0.04], ['split', 0.04], ['notes', 0.14], ['setup', 0.1], ['tab', 0.04],
+// share of the progress bar per stage (the note model takes about half as long as the
+// guitar isolation per guitar part, on the processor)
+export const STAGES = [
+  ['prepare', 0.02], ['separate', 0.5], ['rhythm', 0.04], ['split', 0.03], ['notes', 0.3], ['setup', 0.08], ['tab', 0.03],
 ];
 
 function makeProgress(cb) {
@@ -46,27 +55,59 @@ function makeProgress(cb) {
   };
 }
 
-/** Run basic-pitch on a mono 44.1 kHz signal, correcting the tuning offset first. */
+/**
+ * Notes of a mono 44.1 kHz guitar signal, correcting the tuning offset first.
+ * With the guitar transcription model (env.getTranscriber) its notes are used, and
+ * basic-pitch only supplies the pitch-bend tracks and attack strengths that the technique
+ * detection reads; without it basic-pitch finds the notes too.
+ */
 export async function detectNotes(env, mono44, opts, cents, onProgress) {
   const session = await env.getBasicPitch();
   // shift pitch so the instrument lines up with A440: play it r times faster
   const r = Math.abs(cents) >= 12 ? Math.pow(2, -cents / 1200) : 1;
+  let hr = null;
+  if (opts.notesModel !== 'basic' && env.getTranscriber) {
+    try {
+      hr = await env.getTranscriber();
+    } catch (err) {
+      // e.g. offline before the model was ever downloaded: basic-pitch still works
+      if (env.cancelled && env.cancelled()) throw err;
+      console.warn('note model unavailable, using basic-pitch:', (err && err.message) || err);
+    }
+  }
   const a22 = resample(mono44, DEMUCS.sr * r, BP.sr);
   const peakNorm = Math.max(1e-6, rms(a22)) ;
   // basic-pitch was trained on normalised audio; keep levels sane
   const g = Math.min(20, 0.12 / peakNorm);
   for (let i = 0; i < a22.length; i++) a22[i] *= g;
-  const model = await runModel(env.ort, session, a22, { onProgress, shouldCancel: env.cancelled });
+  const share = hr ? 0.12 : 1;
+  const model = await runModel(env.ort, session, a22, { onProgress: (f) => onProgress(share * f), shouldCancel: env.cancelled });
+  const nF = BP.nNotes;
+  const onsetAt = (s, pitch) => {
+    let op = 0;
+    for (let t = Math.max(0, s - 2); t <= Math.min(model.nT - 1, s + 2); t++) op = Math.max(op, model.onset[t * nF + (pitch - 21)]);
+    return op;
+  };
+  if (hr) {
+    const x16 = resample(mono44, DEMUCS.sr * r, HR.sr, 64, 0.958);
+    const act = await hrActivations(env.ort, hr, x16, { hop: opts.hrHop, onProgress: (f) => onProgress(share + (1 - share) * f), shouldCancel: env.cancelled });
+    const found = hrNotes(act, { onsetThreshold: opts.hrOnset, offsetThreshold: opts.hrOffset, frameThreshold: opts.hrFrame });
+    const last = model.nT - 1;
+    const framed = found.map((n) => {
+      const s = Math.min(last, Math.max(0, Math.round(timeToFrame(n.t0))));
+      return { s, e: Math.min(last + 1, Math.max(s + 1, Math.round(timeToFrame(n.t1)))), pitch: n.pitch, note: n };
+    });
+    addPitchBends(model, framed);
+    return framed.map((f) => ({
+      t0: f.note.t0 * r, t1: f.note.t1 * r, pitch: f.pitch, amp: f.note.amp, velocity: f.note.velocity,
+      bends: f.bends, onsetProb: onsetAt(f.s, f.pitch), hr: true,
+    }));
+  }
   const minLen = Math.max(3, Math.round((opts.minNoteMs / 1000) * (BP.sr / BP.hop)));
   let notes = outputToNotes(model, { onsetThresh: opts.onsetThresh, frameThresh: opts.frameThresh, minNoteLen: minLen, energyTol: opts.energyTol, melodiaTrick: opts.melodia });
   notes = addPitchBends(model, notes);
-  const nF = BP.nNotes;
-  return notes.map((n) => {
-    // raw onset probability around the start (used for legato detection)
-    let op = 0;
-    for (let t = Math.max(0, n.s - 2); t <= Math.min(model.nT - 1, n.s + 2); t++) op = Math.max(op, model.onset[t * nF + (n.pitch - 21)]);
-    return { t0: frameTime(n.s) * r, t1: frameTime(n.e) * r, pitch: n.pitch, amp: n.amp, bends: n.bends, onsetProb: op };
-  });
+  // raw onset probability around the start (used for legato detection)
+  return notes.map((n) => ({ t0: frameTime(n.s) * r, t1: frameTime(n.e) * r, pitch: n.pitch, amp: n.amp, bends: n.bends, onsetProb: onsetAt(n.s, n.pitch) }));
 }
 
 /**
@@ -197,7 +238,9 @@ export async function analyzeStage(stems, userOpts = {}, env) {
     const level = rms(pd.audio);
     if (level < 1e-4) continue;
     const raw = await detectNotes(env, pd.audio, opts, cents, (f) => progress('notes', (pi + f) / partDefs.length, `Hearing the notes${partDefs.length > 1 ? ` (${pd.name})` : ''}`));
-    const notes = cleanNotes(raw, { idPrefix: pd.id + ':', mergeRetrigger: opts.mergeRetrigger, retriggerRatio: opts.retriggerRatio, retriggerAbs: opts.retriggerAbs });
+    // the transcription model hears re-attacks itself; basic-pitch's need the re-trigger check
+    const hrNotesFound = raw.length > 0 && raw[0].hr;
+    const notes = cleanNotes(raw, { idPrefix: pd.id + ':', mergeFragments: !hrNotesFound, mergeRetrigger: hrNotesFound ? false : opts.mergeRetrigger, retriggerRatio: opts.retriggerRatio, retriggerAbs: opts.retriggerAbs });
     if (notes.length < 3 && partDefs.length > 1) continue;
     // a single part's audio is the guitar stem itself; only split parts keep theirs (for playback)
     parts.push({ id: pd.id, name: pd.name, audio: partDefs.length > 1 ? pd.audio : null, notes });

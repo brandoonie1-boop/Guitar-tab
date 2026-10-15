@@ -17,7 +17,7 @@ Everything runs on your own device, in the browser. Nothing is uploaded anywhere
 - **iPhone (Safari):** open the link, tap the Share button, then **Add to Home Screen**.
 - **Windows 10 (Chrome or Edge):** open the link, then click the install icon at the right end of the address bar (or menu → *Apps* → *Install this site as an app*).
 
-The first song downloads about 80 MB of models and engine files once (about 95 MB when it uses the graphics chip); after that the app works offline.
+The first song downloads about 120 MB of models and engine files once (about 135 MB when it uses the graphics chip); after that the app works offline.
 
 ## Using it
 
@@ -28,7 +28,7 @@ The first song downloads about 80 MB of models and engine files once (about 95 M
   - *Spotify, SoundCloud, Bandcamp and other pages* (computer): open the song in another tab, press *Record*, and pick that tab with tab audio on (or on Windows, *Entire screen* with *Share system audio* for a desktop app).
   - *On iPhone*: use iPhone *Screen Recording* while the song plays in its app, then pick the recording with *Choose a file*. Or press *Record* / *Listen* and let the phone hear the song playing on another device or speaker.
   - Recordings stay on your device. Only record music you're allowed to use.
-- **Make the tab:** choose a file, then *Make the tab*. A 3-minute song takes roughly 2–5 minutes on a laptop and longer on a phone. Pick a section (*Part of the song*) to go faster. On a phone, keep the screen on while it works.
+- **Make the tab:** choose a file, then *Make the tab*. A 3-minute song takes roughly 3–7 minutes on a laptop's processor (much less when the browser can use the graphics chip) and longer on a phone. Pick a section (*Part of the song*) to go faster. On a phone, keep the screen on while it works.
 - **Tuning and capo:** the best match is shown with other possibilities and how likely each one is. Tap another one and the whole tab is re-fingered for it. Add the tunings you play to *Tunings you use* so they get picked more readily.
 - **Tempo and bars:** tap the tempo to fix half-time / double-time mix-ups or shift where bars start.
 - **Fix a note:** tap it in the tab to move it to another string, nudge the pitch, or delete it. *Undo* reverts.
@@ -54,10 +54,11 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 
 | | result |
 |---|---|
-| Notes found, guitar on its own (onset F1) | 81% on average: chord comping 75%, single-note lines 87% |
-| Notes found with drums and bass mixed in, after isolation | about 77% (full model 77.9%, light model 77.7% on 20 takes) |
-| String/fret matches what the player used (true notes / transcribed notes) | 75% / 70% |
-| Tuning + capo correct on standard-tuning takes | about 19 in 20 |
+| Notes found, guitar on its own (onset F1, 40 takes) | 90%: chord comping 89.5%, single-note lines 91.6% (basic-pitch, the previous note detector: 79%) |
+| Notes found with drums and bass mixed in, after isolation (16 takes) | 88.7% (basic-pitch: 78.4%) |
+| String/fret matches what the player used (true notes / transcribed notes with a band) | 80% / 68% |
+| Tuning + capo correct on standard-tuning takes | about 19 in 20 (116 of 120 from the true notes, 15 of 16 transcribed with a band) |
+| DAEABE capo 7 test song (Brave Bird style arpeggios) | tuning and capo right; notes 99% and string/fret 97% for the guitar alone, notes 85% and string/fret 100% for the full band mix |
 | Tuning + capo correct on test riffs in DAEABE, FACGCE, open D, drop D, Eb, capo 2/3/7 | 9 of 10 (DADGAD capo 2 was mistaken for standard) |
 | Tempo correct (with drums and bass) | 37 of 40 takes (was 32 before the beat model); beat F-measure 0.98 |
 | Bar lines (downbeats) in the right place | F-measure 0.78 (was 0.30) |
@@ -75,7 +76,7 @@ Things it cannot know for sure:
 |---|---|
 | Guitar isolation | [Demucs v4](https://github.com/adefossez/demucs) `htdemucs_6s` (has a dedicated guitar stem), exported to ONNX with the STFT done in JS. To fit in a phone's memory the model runs as a chain of 13 small graphs (encoder layers, transformer, decoder layers; the outer layers' frequency and time branches separately), the outer layers work through the spectrogram in bands, attention is computed in blocks, and only the stems that are needed come back. Same maths as the original: the engine needs about 450 MB instead of 2 GB (260 MB for the light model, which uses 3.9 s segments instead of 7.8 s). Runs on the graphics chip (WebGPU) when there is one, checks its output, and falls back to the processor. |
 | Two guitars | stereo-position split of the guitar stem |
-| Notes | Spotify [basic-pitch](https://github.com/spotify/basic-pitch) (ONNX) + a JS port of its note decoding, thresholds re-tuned on GuitarSet |
+| Notes | a high-resolution guitar transcription model ([Riley, Edwards & Dixon, ICASSP 2024](https://arxiv.org/abs/2402.15258), weights trained on the François Leduc guitar recordings, never on GuitarSet) on [Kong et al.'s](https://github.com/qiuqiangkong/piano_transcription_inference) onset/offset-regression network: exported to ONNX as four convolution parts and a recurrent head, log-mel front end and note decoding in JS. The convolutions run once per frame in short chunks (on the graphics chip when there is one); the recurrent head runs on overlapping 10 s windows as it was trained. Spotify [basic-pitch](https://github.com/spotify/basic-pitch) adds the pitch-bend tracks, and is the light fallback |
 | Beats and bar lines | [Beat This!](https://github.com/CPJKU/beat_this) small model (ISMIR 2024) on the mix, with its log-mel front end in JS; bar lines by a Viterbi over bar lengths 3–7 scored by its downbeat output (falls back to an onset-envelope tracker) |
 | Pitch reference | spectral peak histogram (cents from A440); corrected before note detection |
 | Strings, frets, tuning, capo | beam search over hand positions, ringing strings, stretches and open strings; every candidate tuning × capo is scored by how naturally the music lays out on it |
@@ -112,6 +113,16 @@ python tools/pack_demucs.py --out models/packed models/chain343980 models/chain1
 ```
 
 then copy `demucs.weights.bin`, `demucs-343980.chain` and `demucs-171990.chain` into `models/` and run the build. `tests/test_demucs.mjs` checks a packed chain against PyTorch's output.
+
+The note model is `guitar-fl.pth` from [xavriley/midi-transcription-models](https://huggingface.co/xavriley/midi-transcription-models) (`pip install piano_transcription_inference torch onnx onnxruntime`):
+
+```
+python tools/export_hrgt.py guitar-fl.pth models/hrgt_fl --check some_guitar.wav
+python tools/finish_parts.py models/hrgt_fl
+python tools/pack_demucs.py --out models/packed --weights hrgt.weights.bin --name hrgt.chain --f16 models/hrgt_fl
+```
+
+then copy `hrgt.weights.bin` and `hrgt.chain` into `models/`. `tests/test_hrgt.mjs` checks the JS front end, the ONNX parts and the note decoding against PyTorch (reference data from `tools/make_hrgt_ref.py`).
 
 ## Credits and licenses
 

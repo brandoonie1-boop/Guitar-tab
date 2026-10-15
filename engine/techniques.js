@@ -5,10 +5,15 @@
 export function detectTechniques(notes, opts = {}) {
   const tech = new Map();
   const get = (id) => { if (!tech.has(id)) tech.set(id, {}); return tech.get(id); };
+  // the pitch track follows the strongest pitch within several semitones of a note, so a
+  // neighbouring note that rings at the same time can look like a bend or vibrato
+  const byStart = notes.slice().sort((a, b) => a.t0 - b.t0);
+  const neighbour = (n, lo, hi) => byStart.some((m) => m !== n && m.t0 < n.t1 - 0.05 && m.t1 > n.t0 + 0.05 && m.pitch !== n.pitch && m.pitch >= n.pitch + lo && m.pitch <= n.pitch + hi);
   // bends / vibrato from the pitch-bend track (1/3 semitone units per frame)
   for (const n of notes) {
     const b = n.bends;
     if (!b || b.length < 6) continue;
+    if (n.fret === 0) continue; // an open string can't be bent or shaken
     const start = median(b.slice(0, Math.min(3, b.length)));
     let mx = -99, mxi = 0;
     for (let i = 0; i < b.length; i++) if (b[i] > mx) { mx = b[i]; mxi = i; }
@@ -20,7 +25,7 @@ export function detectTechniques(notes, opts = {}) {
     for (let i = mxi; i < b.length && b[i] >= start + rise - 1; i++) held++;
     if (stableStart && rise >= 3 && held >= 4 && mxi >= 3 && n.t1 - n.t0 >= 0.18) {
       const semis = Math.round((rise / 3) * 2) / 2; // half-step resolution
-      if (semis >= 0.5) get(n.id).bend = Math.min(3, semis);
+      if (semis >= 0.5 && !neighbour(n, 1, Math.ceil(semis) + 1)) get(n.id).bend = Math.min(3, semis);
       continue;
     }
     // vibrato: several swings of at least 1/3 semitone around the centre
@@ -33,7 +38,7 @@ export function detectTechniques(notes, opts = {}) {
         if (s !== sign) { swings++; sign = s; }
       }
     }
-    if (swings >= 4 && n.t1 - n.t0 > 0.35) get(n.id).vibrato = true;
+    if (swings >= 4 && n.t1 - n.t0 > 0.35 && !neighbour(n, -2, 2)) get(n.id).vibrato = true;
   }
   // legato & slides: consecutive notes on one string, second one barely re-attacked
   const byString = new Map();

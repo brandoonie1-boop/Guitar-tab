@@ -1,5 +1,5 @@
 {
- "version": "eff43ba8bf",
+ "version": "0d2f402bbf",
  "ort": {
   "wasm": "vendor/ort/ort.wasm.bundle.min.mjs",
   "webgpu": "vendor/ort/ort.webgpu.bundle.min.mjs"
@@ -50,6 +50,22 @@
    "sha": "2c3c1d144b",
    "parts": [
     "assets/basic-pitch-2c3c1d144b.0.bin"
+   ]
+  },
+  "hrgtWeights": {
+   "size": 40437248,
+   "sha": "2f8a16210f",
+   "parts": [
+    "assets/hrgt-weights-2f8a16210f.0.bin",
+    "assets/hrgt-weights-2f8a16210f.1.bin",
+    "assets/hrgt-weights-2f8a16210f.2.bin"
+   ]
+  },
+  "hrgtChain": {
+   "size": 76797,
+   "sha": "3b89f179a2",
+   "parts": [
+    "assets/hrgt-chain-3b89f179a2.0.bin"
    ]
   },
   "beatModel": {

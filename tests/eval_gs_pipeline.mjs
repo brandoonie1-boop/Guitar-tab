@@ -1,9 +1,13 @@
 // Full-pipeline evaluation on real guitar recordings (GuitarSet), optionally mixed with drums and bass.
 // usage: node tests/eval_gs_pipeline.mjs <n files> [--mix] [--off] [--every k] [--offset o]
+// env: HR=<dir with hrgt.chain + hrgt.weights.bin> use the guitar transcription model;
+//      STEMS=<dir> cache the separated guitar between runs; OPTS='{...}' extra options
 import fs from 'node:fs';
 import path from 'node:path';
 import { decodeWav } from '../engine/wav.js';
-import { transcribe } from '../engine/pipeline.js';
+import { separateStage, analyzeStage } from '../engine/pipeline.js';
+import { parseChain, loadParts } from '../engine/demucs.js';
+import { hrModel } from '../engine/hrgt.js';
 
 const args = process.argv.slice(2);
 const nFiles = Number(args[0] || 10);
@@ -16,7 +20,7 @@ const AUD = '/home/claude/work/data/guitarset/audio';
 const ortMod = await import('/home/claude/work/jsenv/node_modules/onnxruntime-node/dist/index.js');
 const ort = ortMod.default || ortMod;
 const MODELS = '/home/claude/guitar-tab/models';
-let demucs = null, bp = null, bm = null;
+let demucs = null, bp = null, bm = null, hr = null;
 const STD = [40, 45, 50, 55, 59, 64];
 const extraOpts = process.env.OPTS ? JSON.parse(process.env.OPTS) : {};
 
@@ -28,14 +32,44 @@ const t0 = Date.now();
 for (const name of names) {
   const wav = decodeWav(fs.readFileSync(path.join(AUD, `${name}_mic.wav`)));
   let x = wav.channels[0];
+  // DISTORT=<gain>: overdriven electric-guitar-like tone (soft clipper + a cabinet-ish low-pass)
+  if (process.env.DISTORT) {
+    const g = Number(process.env.DISTORT), y = new Float32Array(x.length);
+    let pk = 0;
+    for (let i = 0; i < x.length; i++) pk = Math.max(pk, Math.abs(x[i]));
+    let lp = 0;
+    const a = Math.exp(-2 * Math.PI * 4500 / 44100);
+    for (let i = 0; i < x.length; i++) { const d = Math.tanh(g * x[i] / pk) / Math.tanh(g); lp = (1 - a) * d + a * lp; y[i] = 0.5 * lp; }
+    x = y;
+  }
   if (mix) x = addBand(x, ANN[name].beats);
-  const res = await transcribe({ left: x, right: null, sr: 44100, name }, { isolate: off ? 'off' : 'guitar', split: 'off', ...extraOpts }, {
+  const uopts = { isolate: off ? 'off' : 'guitar', split: 'off', ...extraOpts };
+  const env = {
     ort,
+    getTranscriber: process.env.HR ? async () => hr || (hr = hrModel(await loadParts(ort, parseChain(fs.readFileSync(path.join(process.env.HR, 'hrgt.chain'))), new Uint8Array(fs.readFileSync(path.join(process.env.HR, 'hrgt.weights.bin'))), { intraOpNumThreads: 2 }))) : null,
     // DEMUCS=<onnx file> SEG=<segment samples> to evaluate another export (e.g. the light model)
     getDemucs: async () => demucs || (demucs = Object.assign(await ort.InferenceSession.create(process.env.DEMUCS || path.join(MODELS, 'htdemucs_6s.f16.onnx'), { intraOpNumThreads: 2 }), { segment: Number(process.env.SEG || 343980) })),
     getBasicPitch: async () => bp || (bp = await ort.InferenceSession.create(path.join(MODELS, 'basic_pitch.onnx'))),
     getBeatModel: process.env.NO_BEAT_MODEL ? null : async () => bm || (bm = await ort.InferenceSession.create(path.join(MODELS, 'beat_this_small.f16.onnx'), { intraOpNumThreads: 2 })),
-  });
+  };
+  let stems = null;
+  const sc = process.env.STEMS ? path.join(process.env.STEMS, `${name}${mix ? '_mix' : ''}${off ? '_off' : ''}${extraOpts.isolate ? '_' + extraOpts.isolate.replace('+', '_') : ''}`) : null;
+  if (sc && fs.existsSync(sc + '.json')) {
+    stems = JSON.parse(fs.readFileSync(sc + '.json', 'utf8'));
+    const f = (k) => new Float32Array(fs.readFileSync(`${sc}.${k}.f32`).buffer.slice(0));
+    stems.gL = f('gL'); stems.gR = stems.mono ? stems.gL : f('gR'); stems.mix22 = f('mix22');
+  } else {
+    stems = await separateStage({ left: x, right: null, sr: 44100, name }, uopts, env);
+    if (sc) {
+      fs.mkdirSync(process.env.STEMS, { recursive: true });
+      const { gL, gR, mix22, ...rest } = stems;
+      fs.writeFileSync(sc + '.gL.f32', Buffer.from(gL.buffer, gL.byteOffset, gL.byteLength));
+      if (gR && gR !== gL) fs.writeFileSync(sc + '.gR.f32', Buffer.from(gR.buffer, gR.byteOffset, gR.byteLength));
+      fs.writeFileSync(sc + '.mix22.f32', Buffer.from(mix22.buffer, mix22.byteOffset, mix22.byteLength));
+      fs.writeFileSync(sc + '.json', JSON.stringify({ ...rest, mono: !gR || gR === gL }));
+    }
+  }
+  const res = await analyzeStage(stems, uopts, env);
   const p = res.parts[0];
   const est = p.notes.filter((n) => !n.dropped);
   const ref = ANN[name].notes.map(([t, d, v, s]) => ({ t0: t, pitch: Math.round(v), string: s, fret: Math.round(v) - STD[s] }));

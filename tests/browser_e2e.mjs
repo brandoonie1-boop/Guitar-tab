@@ -46,7 +46,8 @@ const isoArg = process.argv.indexOf('--isolate');
 if (isoArg >= 0) await page.click(`[data-opt="isolate"][data-val="${process.argv[isoArg + 1]}"]`);
 await page.click('#startBtn');
 let last = '';
-const deadline = Date.now() + 20 * 60 * 1000;
+const ti = process.argv.indexOf('--minutes');
+const deadline = Date.now() + (ti >= 0 ? Number(process.argv[ti + 1]) : 20) * 60 * 1000;
 while (Date.now() < deadline) {
   const done = await page.evaluate(() => !document.getElementById('screenResult').hidden);
   const err = await page.evaluate(() => { const e = document.getElementById('startError'); return e && !e.hidden ? e.textContent : null; });

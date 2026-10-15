@@ -11,7 +11,7 @@ export function cleanNotes(notes, opts = {}) {
   const out = [];
   const lastByPitch = new Map();
   for (const n of ns) {
-    const prev = lastByPitch.get(n.pitch);
+    const prev = opts.mergeFragments === false ? null : lastByPitch.get(n.pitch);
     if (prev && n.t0 - prev.t1 < 0.035 && (n.onsetProb ?? 1) < 0.25) {
       prev.t1 = Math.max(prev.t1, n.t1);
       if (n.bends && prev.bends) prev.bends = prev.bends.concat(n.bends);

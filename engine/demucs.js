@@ -292,32 +292,45 @@ function partData(weights, data) {
 }
 
 /**
- * Create a session for every part of a chain. Returns an object with the same run()
- * interface as a single InferenceSession of the whole model.
+ * Create an InferenceSession for every part of a packed chain (see tools/pack_demucs.py).
+ * Returns the parts in order ({file, in, out, session}); on failure the ones already made
+ * are released.
  * @param {object} ort onnxruntime module
  * @param {object} chain parseChain() result
  * @param {Uint8Array} weights contents of the shared weights file
- * @param {object} sessionOptions passed to every InferenceSession.create
+ * @param {object|function} sessionOptions passed to every InferenceSession.create, or a
+ *   function (part) => options (null skips that part)
  */
-export async function loadChain(ort, chain, weights, sessionOptions = {}, onProgress) {
+export async function loadParts(ort, chain, weights, sessionOptions = {}, onProgress) {
   const parts = [];
   if (weights.byteOffset % 4) weights = weights.slice();
   try {
     for (let i = 0; i < chain.parts.length; i++) {
       const p = chain.parts[i];
+      const so = typeof sessionOptions === 'function' ? sessionOptions(p) : sessionOptions;
+      if (!so) continue; // part not wanted
       // older packs referenced the shared file directly; current ones get float32 data per part
       const externalData = p.data
         ? [{ path: p.data.path, data: partData(weights, p.data) }]
         : [{ path: chain.weights, data: weights }];
-      const session = await ort.InferenceSession.create(p.bytes, { ...sessionOptions, externalData });
+      const session = await ort.InferenceSession.create(p.bytes, { ...so, externalData });
       externalData.length = 0;
-      parts.push({ in: p.in, out: p.out, session });
+      parts.push({ file: p.file, in: p.in, out: p.out, session });
       if (onProgress) onProgress((i + 1) / chain.parts.length);
     }
   } catch (err) {
     for (const p of parts) { try { await p.session.release(); } catch { /* ignore */ } }
     throw err;
   }
+  return parts;
+}
+
+/**
+ * Create a session for every part of a chain. Returns an object with the same run()
+ * interface as a single InferenceSession of the whole model.
+ */
+export async function loadChain(ort, chain, weights, sessionOptions = {}, onProgress) {
+  const parts = await loadParts(ort, chain, weights, sessionOptions, onProgress);
   const lastUse = {};
   parts.forEach((p, i) => { for (const name of Object.values(p.in)) lastUse[name] = i; });
   return {
