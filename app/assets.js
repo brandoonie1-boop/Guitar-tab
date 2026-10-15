@@ -65,7 +65,9 @@ export async function fetchAsset(key, onProgress) {
   const total = a.dl || a.size;
   let loaded = 0;
   const bump = (n) => { loaded += n; if (onProgress) onProgress(Math.min(1, loaded / total)); };
-  const chunks = [];
+  // several parts are written straight into one buffer of the final size (no second copy)
+  const out = a.parts.length > 1 && a.size ? new Uint8Array(a.size) : null;
+  let o = 0, single = null;
   for (const p of a.parts) {
     const url = BASE + p;
     const key2 = url + '#bytes';
@@ -83,15 +85,14 @@ export async function fetchAsset(key, onProgress) {
       if (!r.ok) throw new Error(`Could not download ${key} (${r.status})`);
       const raw = await readWithProgress(r, bump);
       buf = enc === 'b64' ? decodeBase64(new TextDecoder().decode(raw)) : raw;
-      if (cache) { try { await cache.put(key2, new Response(buf.slice(0))); } catch { /* storage full or blocked */ } }
+      if (cache) { try { await cache.put(key2, new Response(buf)); } catch { /* storage full or blocked */ } }
     }
-    chunks.push(buf);
+    if (!out) { single = buf; break; }
+    if (o + buf.length > out.length) throw new Error(`Downloaded ${key} has the wrong size`);
+    out.set(buf, o);
+    o += buf.length;
   }
-  if (chunks.length === 1) return chunks[0];
-  const out = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0));
-  let o = 0;
-  for (const c of chunks) { out.set(c, o); o += c.length; }
-  return out;
+  return out || single;
 }
 
 export async function hasAsset(key) {

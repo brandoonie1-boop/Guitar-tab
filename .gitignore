@@ -1,6 +1,9 @@
 node_modules/
 models/*.onnx
+models/*.bin
+models/*.chain
 dist-artifact/
 *.log
 .DS_Store
 testdata/
+__pycache__/

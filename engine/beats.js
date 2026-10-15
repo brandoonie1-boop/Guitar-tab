@@ -1,14 +1,14 @@
 // Tempo and beat tracking (onset strength + dynamic programming, after Ellis 2007 / librosa),
 // plus a simple meter / downbeat estimate.
-import { stftMag, melFilterbank, applyFilterbank } from './spectral.js';
+import { melFilterbank, melPower } from './spectral.js';
 
 /** Onset strength envelope (librosa-style log-mel spectral flux). */
 export function onsetEnvelope(x, sr, opts = {}) {
   const nfft = opts.nfft || 2048, hop = opts.hop || 512;
-  const spec = stftMag(x, sr, nfft, hop);
   const bands = melFilterbank(sr, nfft, opts.nMels || 96, opts.fmin || 30, opts.fmax || 11000);
-  const mel = applyFilterbank(spec, bands);
-  const nB = bands.length, T = spec.frames;
+  // frame by frame: the full spectrogram of a long song would take ~100 MB
+  const { mel, frames: T } = melPower(x, sr, nfft, hop, bands);
+  const nB = bands.length;
   // power -> dB with 80 dB floor below the max
   let mx = 1e-10;
   for (let i = 0; i < mel.length; i++) if (mel[i] > mx) mx = mel[i];

@@ -196,6 +196,7 @@ button.fact:hover { border-color: var(--accent); }
   background: var(--fg); color: var(--bg); padding: 10px 14px; border-radius: 9px; font-size: 14px; max-width: calc(100% - 32px);
 }
 .error { color: var(--bad); }
+.notice { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--warn); border-radius: var(--radius); background: var(--surface); color: var(--fg); font-size: 14px; }
 .hint { padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); font-size: 14px; }
 @media (max-width: 520px) {
   .setting { grid-template-columns: minmax(0, 1fr); }

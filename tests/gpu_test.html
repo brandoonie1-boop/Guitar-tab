@@ -2,12 +2,13 @@
 <pre id="out">running</pre>
 <script type="module">
 // Runs the separation on a short excerpt with the WebGPU EP and with the (validated) WASM EP, and compares.
-import { separate } from '../engine/demucs.js';
+import { separate, parseChain, loadChain } from '../engine/demucs.js';
 const out = document.getElementById('out');
 const T0 = performance.now();
 const log = (s) => { const line = `[${((performance.now() - T0) / 1000).toFixed(1)}s] ${s}`; out.textContent += '\n' + line; console.log(line); };
 const params = new URLSearchParams(location.search);
 const model = params.get('model') || 'models/htdemucs_6s.f16.onnx';
+const chainName = params.get('chain'); // e.g. demucs-171990: packed chain + models/demucs.weights.bin
 const secs = Number(params.get('secs') || 6);
 const eps = (params.get('eps') || 'webgpu,wasm').split(',');
 async function wasmBinary(key) {
@@ -22,8 +23,15 @@ async function run(ep, left, right) {
   const ort = mod.default && mod.default.InferenceSession ? mod.default : mod;
   ort.env.wasm.wasmBinary = await wasmBinary(ep === 'webgpu' ? 'ortWasmGpu' : 'ortWasm');
   ort.env.wasm.numThreads = 1;
-  const bytes = new Uint8Array(await (await fetch('../' + model)).arrayBuffer());
-  const session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
+  let session;
+  if (chainName) {
+    const chain = parseChain(await (await fetch(`../models/${chainName}.chain`)).arrayBuffer());
+    const weights = new Uint8Array(await (await fetch('../models/demucs.weights.bin')).arrayBuffer());
+    session = await loadChain(ort, chain, weights, { executionProviders: [ep], graphOptimizationLevel: 'all' });
+  } else {
+    const bytes = new Uint8Array(await (await fetch('../' + model)).arrayBuffer());
+    session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
+  }
   log(`${ep}: session ready`);
   const res = await separate(ort, session, left, right, { keep: { guitar: 'stereo', drums: 'stereo' }, check: true, onCheck: (snr) => log(`${ep}: recon check ${snr.toFixed(1)} dB`) });
   log(`${ep}: separate done`);

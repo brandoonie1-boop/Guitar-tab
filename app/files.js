@@ -15,8 +15,10 @@ export async function decodeFile(file) {
       if (p && p.then) p.then(ok, bad);
     } catch (e) { bad(e); }
   });
-  const left = audioBuffer.getChannelData(0).slice();
-  const right = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1).slice() : null;
+  // the decoded channels themselves, not copies: they are handed (transferred) to the worker
+  // later, so a long song is held in memory once rather than twice
+  const left = audioBuffer.getChannelData(0);
+  const right = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : null;
   return { left, right, sr: audioBuffer.sampleRate, duration: audioBuffer.duration, channels: audioBuffer.numberOfChannels };
 }
 

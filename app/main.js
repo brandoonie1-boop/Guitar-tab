@@ -36,7 +36,8 @@ const STRING_ORD = ['6th', '5th', '4th', '3rd', '2nd', '1st'];
 
 const state = {
   file: null,
-  audio: null, // decoded {left,right,sr,duration}
+  audio: null, // decoded {left,right,sr,duration}: kept only until the next run takes it
+  info: null, // {duration, channels} of the picked file
   opts: { isolate: 'guitar', split: 'auto', tuning: null, capo: null, quality: 'best' },
   worker: null,
   project: null, // {id, name, result, ...}
@@ -55,6 +56,11 @@ const caps = {
   gpu: !!navigator.gpu,
 };
 
+const IS_PHONE = /iPhone|iPod|Android.+Mobile/.test(navigator.userAgent);
+const DEBUG = /[?&]debug\b/.test(location.search);
+// Phones and small-memory computers default to the light isolation model: on GuitarSet with a
+// band mixed in it found the same notes (F1 77.7 vs 77.9) with about 40% less engine memory.
+const DEFAULT_MODEL = IS_PHONE || (navigator.deviceMemory && navigator.deviceMemory <= 4) ? 'lite' : 'full';
 const APP_URL = 'https://guitar-tab.onrender.com/';
 function gpuPref() {
   try { return localStorage.getItem('gt-gpu') || 'on'; } catch { return 'on'; }
@@ -126,10 +132,11 @@ function readOpts() {
   o.capo = cv === 'auto' ? null : Number(cv);
   o.split = $('optSplit').value;
   o.quality = $('optQuality').value;
+  o.model = $('optModel').value;
   const a = parseTime($('rangeFrom').value), b = parseTime($('rangeTo').value);
   o.range = null;
   if (a != null || b != null) {
-    const dur = state.audio ? state.audio.duration : 1e9;
+    const dur = state.info ? state.info.duration : 1e9;
     const from = Math.max(0, a ?? 0), to = Math.min(dur, b ?? dur);
     if (to - from >= 2) o.range = [from, to];
   }
@@ -148,15 +155,24 @@ async function pickFile(file) {
   $('picked').hidden = false;
   $('pickedName').textContent = file.name;
   $('pickedInfo').textContent = 'Reading…';
+  state.audio = null;
+  if (IS_PHONE && file.size > 400e6) {
+    state.file = null; state.info = null;
+    $('pickedInfo').textContent = '';
+    showError(`This file is too big to open on a phone (${Math.round(file.size / 1e6)} MB). Save just the audio, or a shorter clip, and pick that.`);
+    return;
+  }
   try {
     const a = await decodeFile(file);
     state.file = file;
     state.audio = a;
+    state.info = { duration: a.duration, channels: a.channels };
     $('pickedInfo').textContent = `${fmtTime(a.duration)} · ${a.channels > 1 ? 'stereo' : 'mono'}`;
     $('startBtn').disabled = false;
     if (a.duration > 600) showError('This file is over 10 minutes. Pick a section below so it finishes in a reasonable time.');
+    else if (IS_PHONE && a.duration > 420) showError('Long song for a phone. If it stops partway, pick a section below.');
   } catch (e) {
-    state.file = null; state.audio = null;
+    state.file = null; state.audio = null; state.info = null;
     $('pickedInfo').textContent = '';
     showError("This file couldn't be read. Try an MP3, M4A, WAV or a phone video. (" + (e.message || e) + ')');
   }
@@ -208,6 +224,7 @@ function onProgress(p) {
       txt += ` · about ${remain > 90 ? Math.round(remain / 60) + ' min' : Math.max(5, Math.round(remain / 5) * 5) + ' s'} left`;
     }
   }
+  if (DEBUG && p.wasmMB) txt += ` · engine memory ${p.wasmMB} MB`;
   $('workStatus').textContent = txt;
 }
 
@@ -221,84 +238,231 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && !$('screenWork').hidden) keepAwake(true);
 });
 
-$('startBtn').addEventListener('click', () => start(false));
+$('startBtn').addEventListener('click', () => start());
 $('cancelBtn').addEventListener('click', () => {
-  if (state.worker) { state.worker.postMessage({ type: 'cancel' }); }
+  // ending the worker stops at once, even in the middle of a long engine call
+  if (state.job) state.job.cancel();
 });
 
-async function start(retry = false) {
-  if (!state.audio) return;
+/*
+ * Each run gets a fresh worker that is ended afterwards (the engine's memory can only grow,
+ * so ending the worker is the only way to hand it back). If a run fails because the graphics
+ * chip didn't work or memory ran out, it is retried automatically with lighter settings:
+ *   graphics chip -> processor -> lighter isolation model.
+ * A marker in localStorage notices runs that never finished because the browser ended the page.
+ */
+const RUN_KEY = 'gt-run';
+function setRunMarker(v) { try { if (v) localStorage.setItem(RUN_KEY, JSON.stringify(v)); else localStorage.removeItem(RUN_KEY); } catch { /* ignore */ } }
+function getRunMarker() { try { return JSON.parse(localStorage.getItem(RUN_KEY) || 'null'); } catch { return null; } }
+function modelPref() { try { return localStorage.getItem('gt-model') || DEFAULT_MODEL; } catch { return DEFAULT_MODEL; } }
+function setModelPref(v) { try { localStorage.setItem('gt-model', v); } catch { /* ignore */ } $('optModel').value = v; }
+function setGpuPref(v) { try { localStorage.setItem('gt-gpu', v); } catch { /* ignore */ } $('optGpu').value = v; }
+const looksLikeMemory = (msg) => /memory|oom|allocation|array buffer|rangeerror|aborted|out of bounds/i.test(msg || '');
+
+async function takeAudio() {
+  // the decoded samples are handed to the worker (not copied); decode again for another run
+  if (state.audio) { const a = state.audio; state.audio = null; return a; }
+  return decodeFile(state.file);
+}
+
+// Run one job ('separate' or 'analyze') in a fresh worker that is ended when the job is done.
+// Resolves with the job's final message; rejects with {message, gpuFailed?, crash?}.
+function runJob(type, payload, transfer) {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    let done = false;
+    const end = () => {
+      done = true;
+      try { w.terminate(); } catch { /* ignore */ }
+      if (state.job === job) state.job = null;
+    };
+    const job = { cancel: () => { if (!done) { end(); reject({ message: 'cancelled' }); } } };
+    state.job = job;
+    w.addEventListener('error', (ev) => {
+      // the worker itself died (for example the engine ran out of memory)
+      ev.preventDefault();
+      if (done) return;
+      end();
+      reject({ message: ev.message || 'the processing worker stopped', crash: true });
+    });
+    w.onmessage = (e) => {
+      const m = e.data;
+      if (done) return;
+      if (m.type === 'progress') onProgress(m);
+      else if (m.type === 'engine') state.backend = m;
+      else if (m.type === 'error') { end(); reject(m); }
+      else if (m.type === 'stems' || m.type === 'result') { end(); resolve(m); }
+    };
+    w.postMessage({ type, ...payload }, transfer);
+  });
+}
+
+const buffersOf = (st) => {
+  const t = [st.gL.buffer];
+  if (st.gR && st.gR !== st.gL) t.push(st.gR.buffer);
+  if (st.rhythm) t.push(st.rhythm.buffer);
+  return t;
+};
+
+async function start(mode = null) {
+  if (!state.file) return;
   const opts = readOpts();
-  const a = state.audio;
+  if (!mode) {
+    mode = {
+      gpu: !$('gpuRow').hidden && $('optGpu').value === 'on',
+      lite: opts.model === 'lite',
+      // each engine thread costs memory too; phones gain little from more than 4
+      threads: IS_PHONE ? 4 : 8,
+    };
+  }
   show('screenWork');
   $('workTitle').textContent = `Working on ${state.file.name}`;
   $('workBar').style.width = '1%';
-  $('workStatus').textContent = 'Starting';
+  $('workStatus').textContent = 'Reading the file';
   lastFrac = 0; sepStart = 0; workStart = performance.now();
   setStep('load');
   keepAwake(true);
-  if (!state.worker) {
-    state.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-    state.worker.addEventListener('error', (ev) => {
-      // a crash inside the worker (e.g. out of memory with many threads): retry once on one thread
-      ev.preventDefault();
-      workerFailed(ev.message || 'the processing worker stopped');
-    });
+  if (state.job) state.job.cancel();
+  let a;
+  try {
+    a = await takeAudio();
+  } catch (e) {
+    keepAwake(false);
+    show('screenStart');
+    showError("This file couldn't be read again. (" + (e.message || e) + ')');
+    return;
   }
-  const w = state.worker;
-  state.retrying = retry;
   // keep the recording for playback: the original file if this browser can play it, otherwise a WAV
   const canPlay = state.file.type && new Audio().canPlayType(state.file.type);
   const mixBlob = canPlay ? state.file : wavBlob(a.right ? [a.left, a.right] : [a.left]);
-  const left = a.left.slice(), right = a.right ? a.right.slice() : null;
+  // only the chosen section goes to the worker
+  let left = a.left, right = a.right, offset = 0;
+  if (opts.range) {
+    const i0 = Math.max(0, Math.floor(opts.range[0] * a.sr)), i1 = Math.min(left.length, Math.ceil(opts.range[1] * a.sr));
+    left = left.slice(i0, i1);
+    right = right ? right.slice(i0, i1) : null;
+    offset = i0 / a.sr;
+  }
+  const sr = a.sr, name = state.file.name;
+  a = null;
   const runOpts = {
-    threads: retry ? 1 : 8,
-    isolate: opts.isolate, split: opts.split, tuning: opts.tuning, capo: opts.capo, range: opts.range,
+    threads: mode.threads, gpu: mode.gpu, lite: mode.lite,
+    isolate: opts.isolate, split: opts.split, tuning: opts.tuning, capo: opts.capo, range: null,
     overlap: opts.quality === 'fast' ? 0.1 : 0.25,
-    gpu: !$('gpuRow').hidden && $('optGpu').value === 'on',
     preferTunings: favoriteTunings(),
+    debugMem: DEBUG,
   };
-  w.onmessage = async (e) => {
-    const m = e.data;
-    if (m.type === 'progress') onProgress(m);
-    else if (m.type === 'gpu' && !m.ok) {
-      // remember that the graphics chip didn't work here, so next time goes straight to the processor
-      try { localStorage.setItem('gt-gpu', 'off'); } catch { /* ignore */ }
-      $('optGpu').value = 'off';
-    }
-    else if (m.type === 'error') {
-      if (m.message !== 'cancelled' && !state.retrying && caps.threads > 1) { workerFailed(m.message); return; }
-      keepAwake(false);
-      show('screenStart');
-      showError(m.message === 'cancelled' ? 'Stopped.' : `Something went wrong: ${m.message}`);
-    } else if (m.type === 'result') {
-      keepAwake(false);
-      try {
-        await finish(m, mixBlob, opts);
-      } catch (err) {
-        console.error(err);
-        show('screenStart');
-        showError('Something went wrong while showing the tab: ' + (err.message || err));
-      }
-    }
-  };
-  w.postMessage({ type: 'run', audio: { left, right, sr: a.sr, name: state.file.name }, opts: runOpts }, [left.buffer].concat(right ? [right.buffer] : []));
-}
-
-const DEFAULT_FAVS = ['38,45,52,57,59,64']; // DAEABE
-function workerFailed(msg) {
-  console.warn('worker failed:', msg);
-  try { state.worker.terminate(); } catch { /* ignore */ }
-  state.worker = null;
-  if (!state.retrying && state.audio) {
-    toast('Retrying with a single thread');
-    start(true);
+  const marker = { t: Date.now(), gpu: mode.gpu, lite: mode.lite, name, phase: 'separate', hidden: document.visibilityState === 'hidden' };
+  // 1. isolate the guitar (its own worker, ended afterwards so the model's memory is freed)
+  let st;
+  if (opts.isolate === 'off') {
+    st = { gL: left, gR: right, rhythm: null, stereo: !!right, sr, offset, duration: left.length / sr, name };
   } else {
-    keepAwake(false);
+    setRunMarker(marker);
+    try {
+      const m = await runJob('separate', { audio: { left, right, sr, name, offset }, opts: runOpts },
+        [left.buffer].concat(right ? [right.buffer] : []));
+      st = m.stems;
+    } catch (m) {
+      setRunMarker(null);
+      runFailed(mode, m, 'separate');
+      return;
+    }
+  }
+  left = null; right = null;
+  // 2. everything else in a fresh worker
+  setRunMarker({ ...marker, phase: 'analyze' });
+  let res;
+  try {
+    res = await runJob('analyze', { stems: st, opts: runOpts }, buffersOf(st));
+  } catch (m) {
+    setRunMarker(null);
+    runFailed(mode, m, 'analyze');
+    return;
+  }
+  st = null;
+  setRunMarker(null);
+  keepAwake(false);
+  clearNotice();
+  res.ms = performance.now() - workStart;
+  res.backend = state.backend ? state.backend.backend : 'none';
+  res.lite = opts.isolate !== 'off' && mode.lite;
+  try {
+    await finish(res, mixBlob, opts);
+  } catch (err) {
+    console.error(err);
     show('screenStart');
-    showError(`Something went wrong: ${msg}. Try a shorter section of the song.`);
+    showError('Something went wrong while showing the tab: ' + (err.message || err));
   }
 }
+
+// Decide how to retry a failed run, from lightest change to heaviest.
+function runFailed(mode, m, phase) {
+  console.warn('run failed in', phase, ':', m.message, m.reason || '');
+  if (m.message === 'cancelled') {
+    keepAwake(false);
+    show('screenStart');
+    showError('Stopped.');
+    return;
+  }
+  const memory = m.crash || looksLikeMemory(m.message);
+  if (phase === 'separate') {
+    if (m.gpuFailed || (mode.gpu && memory)) {
+      // remember that the graphics chip didn't work here, so next time goes straight to the processor
+      setGpuPref('off');
+      toast('The graphics chip did not work here. Using the processor instead.');
+      start({ ...mode, gpu: false });
+      return;
+    }
+    if (!mode.lite && memory) {
+      setModelPref('lite');
+      toast('Ran out of memory. Trying again with the lighter isolation model.');
+      start({ ...mode, lite: true });
+      return;
+    }
+    if (m.crash && mode.threads > 1) {
+      toast('Trying again with a single thread.');
+      start({ ...mode, threads: 1 });
+      return;
+    }
+  }
+  keepAwake(false);
+  show('screenStart');
+  const tip = memory ? ' This device ran out of memory. Pick a shorter part of the song below and try again.' : '';
+  showError(`Something went wrong: ${m.message}.${tip}`);
+}
+
+// A run that was still marked as running when the page loaded never finished: the browser
+// ended the page (usually for using too much memory) or it was closed. Lighten the next run.
+function checkLastRun() {
+  const r = getRunMarker();
+  setRunMarker(null);
+  if (!r || Date.now() - r.t > 12 * 3600e3) return;
+  let msg;
+  if (r.hidden) {
+    msg = `The last run (${r.name}) stopped when the app went into the background. Keep the screen on and the app open until it finishes.`;
+  } else if (r.phase === 'analyze') {
+    msg = `The last run (${r.name}) stopped while writing the tab, most likely because the browser ran out of memory. Pick a shorter part of the song below, or close other apps and tabs, then try again.`;
+  } else if (r.gpu) {
+    setGpuPref('off');
+    msg = `The last run (${r.name}) stopped before it finished. It will use the processor instead of the graphics chip this time.`;
+  } else if (!r.lite) {
+    setModelPref('lite');
+    msg = `The last run (${r.name}) stopped before it finished, most likely because the browser ran out of memory. The lighter isolation model is now selected below.`;
+  } else {
+    msg = `The last run (${r.name}) stopped before it finished, most likely because the browser ran out of memory. Pick a shorter part of the song below, or close other apps and tabs, then try again.`;
+  }
+  const n = $('runNotice');
+  n.textContent = msg;
+  n.hidden = false;
+}
+function clearNotice() { $('runNotice').hidden = true; }
+document.addEventListener('visibilitychange', () => {
+  const r = getRunMarker();
+  if (r && state.job) setRunMarker({ ...r, hidden: document.visibilityState === 'hidden' });
+});
+
+const DEFAULT_FAVS = ['38,45,52,57,59,64']; // DAEABE
 
 function favoriteTunings() {
   try {
@@ -351,7 +515,7 @@ function restoreTech(result) {
 }
 
 async function finish(m, mixBlob, opts) {
-  console.info(`processed with ${m.backend} in ${(m.ms / 1000).toFixed(1)} s`);
+  console.info(`processed with ${m.backend}${m.lite ? ' (light model)' : ''} in ${(m.ms / 1000).toFixed(1)} s`);
   const result = m.result;
   restoreTech(result);
   const id = `p${Date.now().toString(36)}`;
@@ -363,22 +527,22 @@ async function finish(m, mixBlob, opts) {
     offset: result.offset || 0,
     summary: summaryOf(result),
     result,
-    stats: { ms: m.ms, backend: m.backend },
+    stats: { ms: m.ms, backend: m.backend, lite: !!m.lite },
   };
   state.project = project;
   state.undo = [];
   // audio for playback
   const urls = {};
   urls.mix = URL.createObjectURL(mixBlob);
-  const g = m.stems.guitarR ? [m.stems.guitarL, m.stems.guitarR] : [m.stems.guitarL];
-  const guitarBlob = wavBlob(g);
+  const guitarBlob = new Blob([m.guitarWav], { type: 'audio/wav' });
   urls.guitar = URL.createObjectURL(guitarBlob);
   const partBlobs = {};
-  for (const [pid, arr] of Object.entries(m.partAudio)) {
-    if (result.parts.length > 1) { partBlobs[pid] = wavBlob([arr]); urls['part:' + pid] = URL.createObjectURL(partBlobs[pid]); }
+  for (const [pid, bytes] of Object.entries(m.partWavs || {})) {
+    partBlobs[pid] = new Blob([bytes], { type: 'audio/wav' });
+    urls['part:' + pid] = URL.createObjectURL(partBlobs[pid]);
   }
+  m.guitarWav = null; m.partWavs = null;
   setUrls(urls);
-  state.stems = m.stems;
   // save
   const stored = await store.saveProject(serializeProject(project));
   if (stored) {
@@ -894,6 +1058,9 @@ function toast(msg) {
 
 fillSelects();
 setupGpuRow();
+$('optModel').value = modelPref();
+$('optModel').addEventListener('change', () => setModelPref($('optModel').value));
+checkLastRun();
 fillFavAdd();
 renderFavorites();
 engineInfo();

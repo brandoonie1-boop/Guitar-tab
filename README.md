@@ -17,7 +17,7 @@ Everything runs on your own device, in the browser. Nothing is uploaded anywhere
 - **iPhone (Safari):** open the link, tap the Share button, then **Add to Home Screen**.
 - **Windows 10 (Chrome or Edge):** open the link, then click the install icon at the right end of the address bar (or menu → *Apps* → *Install this site as an app*).
 
-The first song downloads about 100 MB of models and engine files once; after that the app works offline.
+The first song downloads about 80 MB of models and engine files once (about 95 MB when it uses the graphics chip); after that the app works offline.
 
 ## Using it
 
@@ -29,6 +29,16 @@ The first song downloads about 100 MB of models and engine files once; after tha
 - **Export:** text tab (.txt), Guitar Pro (.gp, opens in Guitar Pro / TuxGuitar / MuseScore / Songsterr), MIDI, and the isolated guitar as .wav.
 - **Saved tabs** stay on the device you made them on.
 
+## If a run stops or the page reloads
+
+Separating a whole song is memory-hungry, and phones end a page that uses too much. The app is built to stay well inside those limits (about 0.9 GB in total for a 4–5 minute song on a phone, 1.1–1.3 GB on a computer), and it recovers by itself if a run still fails:
+
+- If the graphics chip fails or gives bad output, the run restarts on the processor.
+- If memory runs out, the run restarts with the **light isolation model** (about 40% less memory, same notes found on our tests). Phones and computers with 4 GB of memory or less use it from the start. You can switch models under *Guitar isolation model*.
+- If the browser ends the page in the middle of a run, the app notices on the next visit, says so, and picks lighter settings for the next try.
+- Long songs on a phone: pick a section under *Part of the song* if it still stops.
+- On a phone, keep the app open and the screen on until it finishes. Switching apps pauses the work and can end it.
+
 ## How accurate is it?
 
 It gets you most of the way, not a perfect 1:1 copy. Expect to check it by ear and fix some notes.
@@ -38,7 +48,7 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 | | result |
 |---|---|
 | Notes found, guitar on its own (onset F1) | 81% on average: chord comping 75%, single-note lines 87% |
-| Notes found with drums and bass mixed in, after isolation | about 77% |
+| Notes found with drums and bass mixed in, after isolation | about 77% (full model 77.9%, light model 77.7% on 20 takes) |
 | String/fret matches what the player used (true notes / transcribed notes) | 75% / 70% |
 | Tuning + capo correct on standard-tuning takes | about 19 in 20 |
 | Tuning + capo correct on test riffs in DAEABE, FACGCE, open D, drop D, Eb, capo 2/3/7 | 9 of 10 (DADGAD capo 2 was mistaken for standard) |
@@ -55,7 +65,7 @@ Things it cannot know for sure:
 
 | Step | What does it |
 |---|---|
-| Guitar isolation | [Demucs v4](https://github.com/adefossez/demucs) `htdemucs_6s` (has a dedicated guitar stem), exported to ONNX with the STFT done in JS and attention computed in blocks to save memory. Runs on the graphics chip (WebGPU) when there is one, checks its output, and falls back to the processor. Matches the PyTorch model to 80+ dB SNR on both paths. |
+| Guitar isolation | [Demucs v4](https://github.com/adefossez/demucs) `htdemucs_6s` (has a dedicated guitar stem), exported to ONNX with the STFT done in JS. To fit in a phone's memory the model runs as a chain of 13 small graphs (encoder layers, transformer, decoder layers; the outer layers' frequency and time branches separately), the outer layers work through the spectrogram in bands, attention is computed in blocks, and only the stems that are needed come back. Same maths as the original: the engine needs about 450 MB instead of 2 GB (260 MB for the light model, which uses 3.9 s segments instead of 7.8 s). Runs on the graphics chip (WebGPU) when there is one, checks its output, and falls back to the processor. |
 | Two guitars | stereo-position split of the guitar stem |
 | Notes | Spotify [basic-pitch](https://github.com/spotify/basic-pitch) (ONNX) + a JS port of its note decoding, thresholds re-tuned on GuitarSet |
 | Tempo / beats | onset envelope + dynamic-programming beat tracker |
@@ -83,7 +93,17 @@ node tools/build.mjs --ort node_modules/onnxruntime-web/dist
 node tools/serve.mjs 8080
 ```
 
-`tools/export_demucs.py` and `tools/to_fp16_storage.py` regenerate the Demucs ONNX model from the official weights (`adefossez/HTDemucs-6s` on Hugging Face).
+The Demucs model files are generated from the official weights (`adefossez/HTDemucs-6s` on Hugging Face), from a folder holding `models/5c90dfd2.json` and `models/htdemucs_6s.safetensors`:
+
+```
+python tools/export_demucs_parts.py --segment 343980 --out models/chain343980 --check
+python tools/export_demucs_parts.py --segment 171990 --out models/chain171990 --check
+python tools/finish_parts.py models/chain343980
+python tools/finish_parts.py models/chain171990
+python tools/pack_demucs.py --out models/packed models/chain343980 models/chain171990
+```
+
+then copy `demucs.weights.bin`, `demucs-343980.chain` and `demucs-171990.chain` into `models/` and run the build. `tests/test_demucs.mjs` checks a packed chain against PyTorch's output.
 
 ## Credits and licenses
 

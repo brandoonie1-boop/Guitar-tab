@@ -1,8 +1,8 @@
 // Compare the JS Demucs port (STFT/iSTFT + ONNX core) against PyTorch apply_model output.
-// usage: node tests/test_demucs.mjs <models dir with sep_in.f32 / sep_ref_*.f32> <onnx path> [node|web]
+// usage: node tests/test_demucs.mjs <models dir with sep_in.f32 / sep_ref_*.f32> <onnx or .chain path> [node|web]
 import fs from 'node:fs';
 import path from 'node:path';
-import { separate } from '../engine/demucs.js';
+import { separate, parseChain, loadChain } from '../engine/demucs.js';
 
 const [dir, onnxPath, runtime = 'node'] = process.argv.slice(2);
 const ort = runtime === 'web'
@@ -19,7 +19,10 @@ const left = inp.slice(0, n), right = inp.slice(n);
 const opts = runtime === 'web' ? { executionProviders: ['wasm'], ...(process.env.SESS ? JSON.parse(process.env.SESS) : {}) } : { intraOpNumThreads: 2 };
 if (runtime === 'web') { ort.env.wasm.numThreads = Number(process.env.THREADS || 1); }
 let t0 = Date.now();
-const session = await ort.InferenceSession.create(fs.readFileSync(onnxPath), opts);
+// a packed chain (tools/pack_demucs.py) needs the shared weights file next to it (web runtime only)
+const session = onnxPath.endsWith('.chain')
+  ? await loadChain(ort, parseChain(fs.readFileSync(onnxPath)), new Uint8Array(fs.readFileSync(path.join(path.dirname(onnxPath), 'demucs.weights.bin'))), opts)
+  : await ort.InferenceSession.create(fs.readFileSync(onnxPath), opts);
 console.log('session', Date.now() - t0, 'ms');
 t0 = Date.now();
 const out = await separate(ort, session, left, right, {

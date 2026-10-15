@@ -1,5 +1,5 @@
 {
- "version": "8ba1bc9068",
+ "version": "9c06959f9f",
  "ort": {
   "wasm": "vendor/ort/ort.wasm.bundle.min.mjs",
   "webgpu": "vendor/ort/ort.webgpu.bundle.min.mjs"
@@ -20,14 +20,29 @@
     "assets/ort-wasm-gpu-39f9f0894d.1.bin"
    ]
   },
-  "demucs": {
-   "size": 58375170,
-   "sha": "f97c8c7ffc",
+  "demucsWeights": {
+   "size": 64091136,
+   "sha": "1e19b46170",
    "parts": [
-    "assets/demucs-6s-f97c8c7ffc.0.bin",
-    "assets/demucs-6s-f97c8c7ffc.1.bin",
-    "assets/demucs-6s-f97c8c7ffc.2.bin",
-    "assets/demucs-6s-f97c8c7ffc.3.bin"
+    "assets/demucs-weights-1e19b46170.0.bin",
+    "assets/demucs-weights-1e19b46170.1.bin",
+    "assets/demucs-weights-1e19b46170.2.bin",
+    "assets/demucs-weights-1e19b46170.3.bin",
+    "assets/demucs-weights-1e19b46170.4.bin"
+   ]
+  },
+  "demucsFull": {
+   "size": 649056,
+   "sha": "f48135945a",
+   "parts": [
+    "assets/demucs-full-f48135945a.0.bin"
+   ]
+  },
+  "demucsLite": {
+   "size": 618691,
+   "sha": "a967557ae5",
+   "parts": [
+    "assets/demucs-lite-a967557ae5.0.bin"
    ]
   },
   "basicpitch": {

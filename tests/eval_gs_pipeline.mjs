@@ -31,7 +31,8 @@ for (const name of names) {
   if (mix) x = addBand(x, ANN[name].beats);
   const res = await transcribe({ left: x, right: null, sr: 44100, name }, { isolate: off ? 'off' : 'guitar', split: 'off', ...extraOpts }, {
     ort,
-    getDemucs: async () => demucs || (demucs = await ort.InferenceSession.create(path.join(MODELS, 'htdemucs_6s.f16.onnx'), { intraOpNumThreads: 2 })),
+    // DEMUCS=<onnx file> SEG=<segment samples> to evaluate another export (e.g. the light model)
+    getDemucs: async () => demucs || (demucs = Object.assign(await ort.InferenceSession.create(process.env.DEMUCS || path.join(MODELS, 'htdemucs_6s.f16.onnx'), { intraOpNumThreads: 2 }), { segment: Number(process.env.SEG || 343980) })),
     getBasicPitch: async () => bp || (bp = await ort.InferenceSession.create(path.join(MODELS, 'basic_pitch.onnx'))),
   });
   const p = res.parts[0];

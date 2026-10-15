@@ -33,10 +33,16 @@ if (fs.existsSync(r('assets'))) for (const f of fs.readdirSync(r('assets'))) fs.
 const assets = {
   ortWasm: chunkFile(path.join(ortDir, 'ort-wasm-simd-threaded.wasm'), 'ort-wasm'),
   ortWasmGpu: chunkFile(path.join(ortDir, 'ort-wasm-simd-threaded.asyncify.wasm'), 'ort-wasm-gpu'),
-  demucs: chunkFile(r('models/htdemucs_6s.f16.onnx'), 'demucs-6s'),
+  // guitar isolation: shared weights + the model split into parts (tools/pack_demucs.py),
+  // full 7.8 s segments and a lighter 3.9 s version for devices short on memory
+  demucsWeights: chunkFile(r('models/demucs.weights.bin'), 'demucs-weights'),
+  demucsFull: chunkFile(r('models/demucs-343980.chain'), 'demucs-full'),
+  demucsLite: chunkFile(r('models/demucs-171990.chain'), 'demucs-lite'),
   basicpitch: chunkFile(r('models/basic_pitch.onnx'), 'basic-pitch'),
 };
-const version = hash(Buffer.from(JSON.stringify(assets) + fs.readFileSync(r('app/main.js')) + fs.readFileSync(r('engine/pipeline.js'))));
+// the version changes whenever any app or engine file changes, so cached copies refresh
+const srcFiles = ['app', 'engine'].flatMap((d) => fs.readdirSync(r(d)).filter((f) => f.endsWith('.js') || f.endsWith('.html') || f.endsWith('.css')).sort().map((f) => fs.readFileSync(r(`${d}/${f}`))));
+const version = hash(Buffer.concat([Buffer.from(JSON.stringify(assets)), ...srcFiles]));
 const manifest = {
   version,
   ort: { wasm: 'vendor/ort/ort.wasm.bundle.min.mjs', webgpu: 'vendor/ort/ort.webgpu.bundle.min.mjs' },
@@ -118,7 +124,9 @@ const artAssets = {
   ortWasm: wasmAsset(path.join(ortDir, 'ort-wasm-simd-threaded.wasm'), 'ort-wasm'),
   // the GPU engine is over the host's 15 MB binary limit, so it ships as base64 text parts
   ortWasmGpu: b64Asset(path.join(ortDir, 'ort-wasm-simd-threaded.asyncify.wasm'), 'ort-wasm-gpu'),
-  demucs: b64Asset(r('models/htdemucs_6s.f16.onnx'), 'demucs-6s'),
+  demucsWeights: b64Asset(r('models/demucs.weights.bin'), 'demucs-weights'),
+  demucsFull: b64Asset(r('models/demucs-343980.chain'), 'demucs-full'),
+  demucsLite: b64Asset(r('models/demucs-171990.chain'), 'demucs-lite'),
   basicpitch: b64Asset(r('models/basic_pitch.onnx'), 'basic-pitch'),
   soundfont: b64Asset(r('vendor/alphatab/soundfont/sonivox.sf3'), 'soundfont'),
 };

@@ -68,85 +68,112 @@ export async function detectNotes(env, mono44, opts, cents, onProgress) {
   });
 }
 
-function crop(x, a, b) { return x.subarray(a, b); }
-
 /**
- * @param audio {left, right, sr(=44100), name}
- * @param env {ort, getDemucs, getBasicPitch, progress, cancelled}
+ * Stage 1: isolate the guitar and build the signal the beat tracker listens to.
+ * The app runs this in its own worker and ends that worker afterwards, so the separation
+ * model's memory is gone before stage 2 starts.
+ * @param audio {left, right, sr(=44100), name, offset?}. Takes ownership of the arrays (it
+ *   clears audio.left/right) so memory can be released as soon as they are used.
+ * @param env {ort, getDemucs, releaseDemucs?, progress, cancelled, checkSeparation?, fallbackToCpu?}
+ * @returns {gL, gR, rhythm, stereo, sr, offset, duration, name}
  */
-export async function transcribe(audio, userOpts = {}, env) {
+export async function separateStage(audio, userOpts = {}, env) {
   const opts = { ...DEFAULT_OPTS, ...userOpts };
   const progress = makeProgress(env.progress);
   const cancelled = env.cancelled || (() => false);
   const sr = audio.sr;
   if (sr !== DEMUCS.sr) throw new Error('audio must be 44.1 kHz');
   let left = audio.left, right = audio.right || audio.left;
-  let offset = 0;
+  const stereo = !!audio.right && audio.right !== audio.left;
+  audio.left = null; audio.right = null;
+  let offset = audio.offset || 0;
   if (opts.range) {
+    // copy the section so the rest of the song can be freed
     const a = Math.max(0, Math.floor(opts.range[0] * sr)), b = Math.min(left.length, Math.ceil(opts.range[1] * sr));
-    left = crop(left, a, b); right = crop(right, a, b);
-    offset = a / sr;
+    left = left.slice(a, b);
+    right = stereo ? right.slice(a, b) : left;
+    offset += a / sr;
   }
-  const duration = left.length / sr;
+  const meta = { stereo, sr, offset, duration: left.length / sr, name: audio.name || 'Song' };
   progress('prepare', 1, 'Getting ready');
-  // 1. isolate the guitar
-  let gL, gR, drums = null, other = null;
-  if (opts.isolate !== 'off') {
-    progress('separate', 0, 'Isolating the guitar');
-    const session = await env.getDemucs((f) => progress('separate', 0.02 * f, 'Loading the separation model'));
-    const keep = { guitar: 'stereo', drums: 'mono', other: 'stereo' };
-    const sepOpts = {
-      keep,
-      overlap: opts.overlap,
-      onProgress: (f) => progress('separate', 0.02 + 0.98 * f, 'Isolating the guitar'),
-      shouldCancel: cancelled,
-      check: !!env.checkSeparation,
-    };
-    let st;
-    try {
-      st = await separate(env.ort, session, left, right, sepOpts);
-    } catch (err) {
-      // the fast (GPU) path failed or produced bad output: redo it on the processor
-      if (!env.fallbackToCpu || (err && err.message === 'cancelled')) throw err;
-      progress('separate', 0, 'Switching to the processor');
-      const cpu = await env.fallbackToCpu(err);
-      st = await separate(cpu.ort, cpu.session, left, right, { ...sepOpts, check: false });
-    }
-    gL = st.guitar[0]; gR = st.guitar[1];
-    drums = st.drums[0];
-    other = st.other;
-    if (opts.isolate === 'guitar+other') {
-      gL = Float32Array.from(gL, (v, i) => v + other[0][i]);
-      gR = Float32Array.from(gR, (v, i) => v + other[1][i]);
-    }
-  } else {
-    gL = left; gR = right;
+  if (opts.isolate === 'off') return { ...meta, gL: left, gR: right, rhythm: null };
+  progress('separate', 0, 'Isolating the guitar');
+  let session = await env.getDemucs((f) => progress('separate', 0.02 * f, 'Loading the separation model'));
+  // only what is used later: guitar (stereo, for the two-guitar split), drums (mono, for the beat)
+  const keep = { guitar: 'stereo', drums: 'mono' };
+  if (opts.isolate === 'guitar+other') keep.other = 'stereo';
+  const sepOpts = {
+    keep,
+    overlap: opts.overlap,
+    onProgress: (f) => progress('separate', 0.02 + 0.98 * f, 'Isolating the guitar'),
+    shouldCancel: cancelled,
+    check: !!env.checkSeparation,
+  };
+  let st;
+  try {
+    st = await separate(env.ort, session, left, right, sepOpts);
+  } catch (err) {
+    // the fast (GPU) path failed or produced bad output: redo it on the processor
+    if (!env.fallbackToCpu || (err && err.message === 'cancelled')) throw err;
+    progress('separate', 0, 'Switching to the processor');
+    const cpu = await env.fallbackToCpu(err);
+    session = cpu.session;
+    st = await separate(cpu.ort, cpu.session, left, right, { ...sepOpts, check: false });
   }
+  session = null;
+  if (env.releaseDemucs) await env.releaseDemucs();
+  const gL = st.guitar[0], gR = st.guitar[1];
+  if (st.other) {
+    const [oL, oR] = st.other;
+    for (let i = 0; i < gL.length; i++) { gL[i] += oL[i]; gR[i] += oR[i]; }
+  }
+  // the beat tracker hears the mix with the drums brought forward, built in place in the drums array
+  const rhythm = st.drums[0];
+  for (let i = 0; i < rhythm.length; i++) rhythm[i] = 0.5 * Math.fround((left[i] + right[i]) / 2) + rhythm[i];
+  st = null; left = null; right = null;
   if (cancelled()) throw new Error('cancelled');
-  // 2. rhythm from the full mix (+ drums)
+  return { ...meta, gL, gR, rhythm };
+}
+
+/**
+ * Stage 2: beat, two-guitar split, notes, tuning and capo, fingering, tab.
+ * @param stems separateStage() result (takes ownership of its arrays)
+ * @param env {ort, getBasicPitch, progress, cancelled}
+ */
+export async function analyzeStage(stems, userOpts = {}, env) {
+  const opts = { ...DEFAULT_OPTS, ...userOpts };
+  const progress = makeProgress(env.progress);
+  const { sr, stereo, offset, duration } = stems;
+  const gL = stems.gL, gR = stems.gR || stems.gL;
+  // 2. rhythm
   progress('rhythm', 0, 'Finding the beat');
-  const mixMono = toMono([left, right]);
-  const rhythmSrc = drums ? Float32Array.from(mixMono, (v, i) => 0.5 * v + drums[i]) : mixMono;
+  let rhythmSrc = stems.rhythm || toMono([gL, gR]);
+  stems.rhythm = null;
   const rh = analyzeRhythm(rhythmSrc, sr, { bpm: opts.bpm, meter: opts.meter });
+  rhythmSrc = null;
   progress('rhythm', 1, 'Finding the beat');
   // 3. split guitars by stereo position
   progress('split', 0, 'Checking for more than one guitar');
-  let partDefs = [{ id: 'all', name: 'Guitar', audio: toMono([gL, gR]) }];
+  let guitarMono = toMono([gL, gR]);
+  let partDefs = [{ id: 'all', name: 'Guitar', audio: guitarMono }];
   let splitInfo = null;
-  if (opts.split !== 'off' && audio.right && audio.right !== audio.left) {
+  if (opts.split !== 'off' && stereo) {
     const sp = splitStereo(gL, gR);
     splitInfo = { ...sp.stats, ...chooseParts(sp.stats) };
     if (splitInfo.mode === 'split') {
+      const names = ['left', 'right'];
+      if (splitInfo.parts.includes('center')) names.push('center');
+      const r = sp.render(names);
       partDefs = [];
-      partDefs.push({ id: 'left', name: 'Guitar 1 (left)', audio: sp.left() });
-      partDefs.push({ id: 'right', name: 'Guitar 2 (right)', audio: sp.right() });
-      if (splitInfo.parts.includes('center')) partDefs.push({ id: 'center', name: 'Guitar 3 (center)', audio: sp.center() });
+      partDefs.push({ id: 'left', name: 'Guitar 1 (left)', audio: r.left });
+      partDefs.push({ id: 'right', name: 'Guitar 2 (right)', audio: r.right });
+      if (r.center) partDefs.push({ id: 'center', name: 'Guitar 3 (center)', audio: r.center });
     }
   }
   progress('split', 1, 'Checking for more than one guitar');
   // 4. tuning reference + notes per part
-  const guitarMono = toMono([gL, gR]);
   const tuningRef = estimateTuningCents(guitarMono, sr);
+  guitarMono = null;
   const cents = tuningRef.confidence > 0.15 ? tuningRef.cents : 0;
   const parts = [];
   for (let pi = 0; pi < partDefs.length; pi++) {
@@ -156,8 +183,10 @@ export async function transcribe(audio, userOpts = {}, env) {
     const raw = await detectNotes(env, pd.audio, opts, cents, (f) => progress('notes', (pi + f) / partDefs.length, `Hearing the notes${partDefs.length > 1 ? ` (${pd.name})` : ''}`));
     const notes = cleanNotes(raw, { idPrefix: pd.id + ':', mergeRetrigger: opts.mergeRetrigger, retriggerRatio: opts.retriggerRatio, retriggerAbs: opts.retriggerAbs });
     if (notes.length < 3 && partDefs.length > 1) continue;
-    parts.push({ id: pd.id, name: pd.name, audio: pd.audio, notes });
+    // a single part's audio is the guitar stem itself; only split parts keep theirs (for playback)
+    parts.push({ id: pd.id, name: pd.name, audio: partDefs.length > 1 ? pd.audio : null, notes });
   }
+  partDefs = null;
   if (!parts.length) throw new Error('No guitar notes found in this file.');
   // drop a side part that just duplicates another (double-tracked guitars)
   if (parts.length > 1) dedupeParts(parts);
@@ -179,17 +208,23 @@ export async function transcribe(audio, userOpts = {}, env) {
   // 6. rhythm grid + tab
   progress('tab', 0, 'Writing the tab');
   const result = {
-    name: audio.name || 'Song',
+    name: stems.name || 'Song',
     duration, offset, sr,
     tuningCents: cents, tuningRef,
     splitInfo,
     rhythm: { bpm: rh.bpm, bpmCandidates: rh.bpmCandidates, beats: rh.beats, meter: rh.meter, downbeatPhase: rh.downbeatPhase },
-    stems: { guitar: [gL, gR], drums, other },
+    stems: { guitar: [gL, gR] },
     parts,
   };
   layout(result);
   progress('tab', 1, 'Done');
   return result;
+}
+
+/** Both stages in one go (Node tools and tests). */
+export async function transcribe(audio, userOpts = {}, env) {
+  const stems = await separateStage(audio, userOpts, env);
+  return analyzeStage(stems, userOpts, env);
 }
 
 function dedupeParts(parts) {

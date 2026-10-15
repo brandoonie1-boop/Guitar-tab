@@ -3,18 +3,34 @@
 import { chromium, webkit } from '/home/claude/work/jsenv/node_modules/playwright-core/index.mjs';
 
 const [url, file, browserName = 'chromium'] = process.argv.slice(2);
-const mobile = process.argv.includes('--mobile');
+const iphone = process.argv.includes('--iphone'); // phone-sized page with an iPhone user agent
+const mobile = process.argv.includes('--mobile') || iphone;
 const si = process.argv.indexOf('--shots');
 const shots = si >= 0 ? process.argv[si + 1] : '/tmp/claude-0/shots';
 const bt = browserName === 'webkit' ? webkit : chromium;
 const browser = await bt.launch({ args: browserName === 'chromium' ? ['--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required'] : [] });
-const ctx = await browser.newContext(mobile ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: browserName !== 'webkit' ? true : undefined, hasTouch: true } : { viewport: { width: 1280, height: 900 } });
+const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1';
+const ctx = await browser.newContext(mobile ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: browserName !== 'webkit' ? true : undefined, hasTouch: true, ...(iphone ? { userAgent: IPHONE_UA } : {}) } : { viewport: { width: 1280, height: 900 } });
 const page = await ctx.newPage();
 const logs = [];
 page.on('console', (m) => { const t = `[${m.type()}] ${m.text()}`; logs.push(t); if (m.type() === 'error' || m.type() === 'warning' || /processed with|GPU/.test(m.text())) console.log(t.slice(0, 300)); });
 page.on('pageerror', (e) => console.log('PAGEERROR', e.message));
 const t0 = Date.now();
 const el = (s) => ((Date.now() - t0) / 1000).toFixed(1) + 's ' + s;
+// --mem: track the peak memory of the browser's page process (the page and its workers)
+let memPeak = 0, memNow = 0;
+if (process.argv.includes('--mem')) {
+  const { execSync } = await import('node:child_process');
+  const pat = browserName === 'webkit' ? /WebKitWebProcess|WPEWebProcess/ : /type=renderer/;
+  setInterval(() => {
+    try {
+      const lines = execSync('ps -eo rss,args', { maxBuffer: 1 << 24 }).toString().split('\n');
+      let mx = 0;
+      for (const l of lines) if (pat.test(l)) mx = Math.max(mx, Number(l.trim().split(/\s+/)[0]) / 1024);
+      memNow = mx; memPeak = Math.max(memPeak, mx);
+    } catch { /* ignore */ }
+  }, 250).unref();
+}
 await page.goto(url);
 await page.waitForTimeout(1500);
 // service worker reload for isolation
@@ -25,6 +41,9 @@ await page.screenshot({ path: `${shots}/${browserName}${mobile ? '-m' : ''}-1-st
 await page.setInputFiles('#fileInput', file);
 await page.waitForFunction(() => !document.getElementById('startBtn').disabled, null, { timeout: 60000 });
 console.log(el('decoded: ' + await page.textContent('#pickedInfo')));
+if (process.argv.includes('--just-guitar')) await page.click('[data-opt="isolate"][data-val="off"]'); // skip isolation
+const isoArg = process.argv.indexOf('--isolate');
+if (isoArg >= 0) await page.click(`[data-opt="isolate"][data-val="${process.argv[isoArg + 1]}"]`);
 await page.click('#startBtn');
 let last = '';
 const deadline = Date.now() + 20 * 60 * 1000;
@@ -34,10 +53,11 @@ while (Date.now() < deadline) {
   if (err) { console.log(el('ERROR: ' + err)); break; }
   if (done) break;
   const st = await page.textContent('#workStatus');
-  if (st !== last) { console.log(el(st)); last = st; }
+  if (st !== last) { console.log(el(st) + (memPeak ? ` [page process ${Math.round(memNow)} MB, peak ${Math.round(memPeak)} MB]` : '')); last = st; }
   await page.waitForTimeout(1000);
 }
 await page.waitForTimeout(3000);
+if (memPeak) console.log(el(`peak page process memory ${Math.round(memPeak)} MB, now ${Math.round(memNow)} MB`));
 console.log(el('result: ' + (await page.textContent('#facts'))));
 console.log('setup:', (await page.textContent('#setupBox')).slice(0, 300));
 const svgCount = await page.evaluate(() => document.querySelectorAll('#tab svg').length);

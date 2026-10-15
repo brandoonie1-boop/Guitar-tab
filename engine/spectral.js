@@ -1,6 +1,39 @@
 // Spectral helpers: magnitude STFT, mel filterbank, chroma.
 import { RealFFT, hannSymmetric, hannPeriodic } from './fft.js';
 
+/** Number of frames stftFrames()/stftMag() produce for n samples. */
+export function frameCount(n, nfft, hop, center = true) {
+  const pad = center ? nfft / 2 : 0;
+  return Math.max(1, Math.floor((n + 2 * pad - nfft) / hop) + 1);
+}
+
+/**
+ * Walk the STFT frame by frame without storing it (periodic Hann, reflect-padded, centered,
+ * identical to stftMag/stft). fn(t, re, im) gets Float64Arrays it must not keep.
+ */
+export function stftFrames(x, nfft, hop, fn, center = true) {
+  const win = hannPeriodic(nfft);
+  const rfft = RealFFT.get(nfft);
+  const bins = nfft / 2 + 1;
+  const pad = center ? nfft / 2 : 0;
+  const n = x.length;
+  const frames = frameCount(n, nfft, hop, center);
+  const buf = new Float64Array(nfft);
+  const re = new Float64Array(bins), im = new Float64Array(bins);
+  for (let t = 0; t < frames; t++) {
+    const start = t * hop - pad;
+    for (let k = 0; k < nfft; k++) {
+      let j = start + k;
+      if (j < 0) j = -j;
+      if (j >= n) j = 2 * n - 2 - j;
+      buf[k] = (j >= 0 && j < n ? x[j] : 0) * win[k];
+    }
+    rfft.forward(buf, re, im);
+    fn(t, re, im);
+  }
+  return frames;
+}
+
 /** Magnitude spectrogram. Returns {mag: Float32Array (frames*bins), frames, bins, hop, sr, nfft}. */
 export function stftMag(x, sr, nfft = 2048, hop = 512, center = true) {
   const win = hannPeriodic(nfft);
@@ -54,6 +87,29 @@ export function melFilterbank(sr, nfft, nMels = 64, fmin = 30, fmax = 8000) {
     bands.push({ start: b0, weights: Float32Array.from(w), center: f1 });
   }
   return bands;
+}
+
+/**
+ * Mel power spectrogram computed frame by frame (same result as
+ * applyFilterbank(stftMag(x, ...), bands) without holding the full spectrogram).
+ */
+export function melPower(x, sr, nfft, hop, bands) {
+  const nB = bands.length;
+  const frames = frameCount(x.length, nfft, hop);
+  const out = new Float32Array(frames * nB);
+  stftFrames(x, nfft, hop, (t, re, im) => {
+    for (let m = 0; m < nB; m++) {
+      const { start, weights } = bands[m];
+      let s = 0;
+      for (let k = 0; k < weights.length; k++) {
+        // same rounding as the stored path: magnitude kept as float32, then squared
+        const v = Math.fround(Math.hypot(re[start + k], im[start + k]));
+        s += weights[k] * v * v;
+      }
+      out[t * nB + m] = s;
+    }
+  });
+  return { mel: out, frames, nB };
 }
 
 export function applyFilterbank(spec, bands) {
