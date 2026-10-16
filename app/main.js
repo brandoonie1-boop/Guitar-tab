@@ -10,6 +10,7 @@ import {
 } from './capture.js';
 import { resample } from '../engine/dsp.js';
 import * as store from './store.js';
+import { helperPing, helperDownload, HELPER_INSTALL_CMD, HELPER_SETUP_FILE, IS_WINDOWS } from './helper.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
@@ -200,6 +201,7 @@ let source = null; // {player, rec, ctx}
 
 function closeSource() {
   if (source) {
+    if (source.cancel) source.cancel();
     if (source.player) source.player.destroy();
     if (source.rec) source.rec.cancel();
     if (source.ctx) source.ctx.close().catch(() => {});
@@ -240,8 +242,72 @@ function useLink(text) {
   if (L.kind === 'invalid') { showError("That doesn't look like a link. Copy the whole address, starting with https://"); return; }
   if (ARTIFACT && L.kind !== 'direct') { artifactPanel(L.kind === 'youtube' ? 'YouTube' : (L.service || 'Links')); return; }
   if (L.kind === 'direct') { downloadLink(L); return; }
-  if (L.kind === 'youtube') { youtubePanel(L); return; }
-  streamPanel(L);
+  // on a computer the link helper fetches the song itself
+  if (!IS_PHONE) { helperLink(L); return; }
+  recordLinkPanel(L);
+}
+
+// the ways to record a linked song while it plays (no helper, or on a phone)
+function recordLinkPanel(L) {
+  if (L.kind === 'youtube') youtubePanel(L);
+  else streamPanel(L);
+}
+
+const linkName = (L) => (L.kind === 'youtube' ? 'YouTube' : (L.service || 'Link'));
+
+async function helperLink(L) {
+  const st = el('p', { text: 'Looking for the link helper on this computer…' });
+  openPanel(linkName(L), st, btnRow(button('Cancel', closeSource)));
+  const mine = source;
+  const info = await helperPing();
+  if (source !== mine) return;
+  if (!info) { helperInstallPanel(L); return; }
+  let cancelled = false;
+  mine.cancel = () => { cancelled = true; };
+  st.textContent = 'Getting the song…';
+  try {
+    const file = await helperDownload(L.url, {
+      onStatus: (s) => { st.textContent = `Getting ${s.title ? `"${s.title}"` : 'the song'}… ${Math.round((s.progress || 0) * 100)}%`; },
+      isCancelled: () => cancelled || source !== mine,
+    });
+    closeSource();
+    await pickFile(file);
+    // straight on to the tab (long songs wait for a section to be picked)
+    if (state.file === file && state.info && state.info.duration <= 600) {
+      toast('Got it. Making the tab.');
+      start();
+    }
+  } catch (err) {
+    if (err && err.code === 'cancelled') return;
+    if (source !== mine) return;
+    openPanel("Couldn't get that song", el('p', { text: (err && err.message) || String(err) }),
+      btnRow(button('Try again', () => helperLink(L), true), button('Record it instead', () => recordLinkPanel(L)), button('Close', closeSource)));
+  }
+}
+
+function helperInstallPanel(L) {
+  if (!IS_WINDOWS) {
+    openPanel(linkName(L),
+      el('p', { text: 'Links go straight in on a Windows computer that has the Guitar Tab link helper. Here, record the song while it plays instead.' }),
+      btnRow(button('Record it', () => recordLinkPanel(L), true), button('Close', closeSource)));
+    return;
+  }
+  const copyBtn = button('Copy setup command', async () => {
+    toast((await copyText(HELPER_INSTALL_CMD)) ? 'Copied. Paste it into PowerShell and press Enter.' : 'Select the command below and copy it.');
+  }, true);
+  const cmd = el('pre', { class: 'ascii', style: 'white-space:pre-wrap;word-break:break-all;margin:0;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)', text: HELPER_INSTALL_CMD });
+  const setup = el('a', { class: 'btn', href: HELPER_SETUP_FILE, download: 'GuitarTabHelperSetup.cmd', text: 'Download setup file' });
+  openPanel('Paste links straight in',
+    el('p', { text: 'This computer needs the free Guitar Tab link helper once. It grabs the song from YouTube, SoundCloud, Bandcamp, Spotify (found on YouTube) and most other sites with yt-dlp, over your own internet connection, and hands it to this page. Setting it up takes about a minute:' }),
+    el('ol', {},
+      el('li', { text: 'Press Copy setup command.' }),
+      el('li', { text: 'Open PowerShell: press the Windows key, type PowerShell, press Enter.' }),
+      el('li', { text: 'Right-click in the PowerShell window to paste, then press Enter. It installs the helper and starts it.' }),
+      el('li', { text: 'Come back here and press Try again. If the browser asks to let this site use apps on this device, choose Allow.' })),
+    cmd,
+    btnRow(copyBtn, button('Try again', () => helperLink(L)), setup),
+    el('p', { class: 'small muted', text: 'Or download the setup file and double-click it (Windows may ask you to confirm). Next time, start the helper from the Guitar Tab helper shortcut on your desktop. Already running but this keeps showing? Click the icon at the left of the address bar and allow this site to reach apps on this device.' }),
+    btnRow(button('Record it instead', () => recordLinkPanel(L)), button('Close', closeSource)));
 }
 
 async function downloadLink(L) {
@@ -254,6 +320,7 @@ async function downloadLink(L) {
     });
     await pickFile(file);
   } catch (err) {
+    if (err.code === 'blocked' && !IS_PHONE && !ARTIFACT) { helperLink(L); return; }
     if (err.code === 'blocked') {
       openPanel(`${L.share || 'This site'} won't hand the file to other pages`,
         el('p', { text: 'Download the file to this device first, then use Choose a file. Or play it and record it with Record.' }),
@@ -310,7 +377,8 @@ function otherTabPanel(L, service, why = '') {
 }
 
 function phonePanel(L, service, why = '') {
-  const kids = [el('p', { text: `${why || `${service} doesn't let other apps take its audio.`} Two ways to get the song in:` }), phoneSteps(service)];
+  const kids = [el('p', { text: `${why || `${service} doesn't let other apps take its audio.`} Two ways to get the song in:` }), phoneSteps(service),
+    el('p', { class: 'small muted', text: 'On a Windows computer with the Guitar Tab link helper, links go straight in.' })];
   const buttons = [];
   if (canListen()) buttons.push(button('Listen', () => startCapture('mic', null), true));
   buttons.push(button('Close', closeSource));
