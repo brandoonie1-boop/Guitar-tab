@@ -28,8 +28,8 @@ The first song downloads about 120 MB of models and engine files once (about 135
   - Without the helper (or on a Mac): press *Record* and pick the tab that plays the song with tab audio on (or on Windows, *Entire screen* with *Share system audio* for a desktop app).
   - *On iPhone*: use iPhone *Screen Recording* while the song plays in its app, then pick the recording with *Choose a file*. Or press *Record* / *Listen* and let the phone hear the song playing on another device or speaker.
   - Recordings stay on your device. Only record music you're allowed to use.
-- **Make the tab:** choose a file, then *Make the tab*. A 3-minute song takes roughly 3–7 minutes on a laptop's processor (much less when the browser can use the graphics chip) and longer on a phone. Pick a section (*Part of the song*) to go faster. On a phone, keep the screen on while it works.
-- **Tuning and capo:** the best match is shown with other possibilities and how likely each one is. Tap another one and the whole tab is re-fingered for it. Add the tunings you play to *Tunings you use* so they get picked more readily.
+- **Make the tab:** choose a file, then *Make the tab* (a pasted link starts by itself). A 3-minute song takes roughly 2–5 minutes on a laptop's processor (much less when the browser can use the graphics chip) and longer on a phone. Pick a section (*Part of the song*) to go faster. *Speed: Balanced* (the default) does about a third less work than *Best quality* and found the same notes in our tests. On a phone, keep the screen on while it works.
+- **Tuning and capo:** worked out from the whole song, all guitar parts together. The best match is shown with other possibilities and how likely each one is. Tap another one and the whole tab is re-fingered for it. Add the tunings you play to *Tunings you use* so they get picked more readily.
 - **Tempo and bars:** tap the tempo to fix half-time / double-time mix-ups or shift where bars start.
 - **Fix a note:** tap it in the tab to move it to another string, nudge the pitch, or delete it. *Undo* reverts.
 - **Practice:** play the original recording, the isolated guitar, or the tab itself (synth), at 50–100% speed, with looping. The cursor follows along.
@@ -74,6 +74,7 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 | Notes found on overdriven guitar (GuitarSet run through a simulated amp, 24 takes) | mild 81%, heavy 65% (basic-pitch: 74%, 60%) |
 | String/fret matches what the player used (true notes / transcribed notes with a band) | 80% / 68% |
 | Tuning + capo correct on standard-tuning takes | about 19 in 20 (116 of 120 from the true notes, 15 of 16 transcribed with a band) |
+| Brave Bird, *Too Late Now* (the real recording, DAEABE capo 7) | tuning and capo right for all three guitar parts, 96% sure (before this version: standard tuning) |
 | DAEABE capo 7 test song (Brave Bird style arpeggios) | tuning and capo right; notes 99% and string/fret 97% for the guitar alone, notes 85% and string/fret 100% for the full band mix |
 | Tuning + capo correct on test riffs in DAEABE, FACGCE, open D, drop D, Eb, capo 2/3/7 | 9 of 10 (DADGAD capo 2 was mistaken for standard) |
 | Tempo correct (with drums and bass) | 37 of 40 takes (was 32 before the beat model); beat F-measure 0.98 |
