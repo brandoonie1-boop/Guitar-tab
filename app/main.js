@@ -11,6 +11,7 @@ import {
 import { resample } from '../engine/dsp.js';
 import * as store from './store.js';
 import { helperPing, helperDownload, HELPER_INSTALL_CMD, HELPER_SETUP_FILE, IS_WINDOWS } from './helper.js';
+import { prefetchAssets } from './assets.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
@@ -44,7 +45,7 @@ const state = {
   file: null,
   audio: null, // decoded {left,right,sr,duration}: kept only until the next run takes it
   info: null, // {duration, channels} of the picked file
-  opts: { isolate: 'guitar', split: 'auto', tuning: null, capo: null, quality: 'best' },
+  opts: { isolate: 'guitar', split: 'auto', tuning: null, capo: null, quality: 'balanced' },
   worker: null,
   project: null, // {id, name, result, ...}
   part: 0,
@@ -181,6 +182,21 @@ async function pickFile(file) {
   }
 }
 
+// Start downloading the models the next run needs (only what isn't cached yet) while the
+// user is still looking at the options; stops when a run starts (the run fetches the rest).
+let prefetching = false, running = false;
+function prefetchModels() {
+  if (prefetching || ARTIFACT) return;
+  prefetching = true;
+  const opts = readOpts();
+  const gpu = !$('gpuRow').hidden && $('optGpu').value === 'on';
+  const keys = [gpu ? 'ortWasmGpu' : 'ortWasm'];
+  if (opts.isolate !== 'off') keys.push('demucsWeights', opts.model === 'lite' ? 'demucsLite' : 'demucsFull');
+  keys.push('beatModel', 'basicpitch');
+  if (opts.notes !== 'basic') keys.push('hrgtWeights', 'hrgtChain');
+  prefetchAssets(keys, { shouldStop: () => running }).catch(() => {}).finally(() => { prefetching = false; });
+}
+
 // a song ready to go: the file (for playback and saving) and its decoded samples
 function setPicked(file, a) {
   state.file = file;
@@ -191,6 +207,7 @@ function setPicked(file, a) {
   $('pickedInfo').textContent = `${fmtTime(a.duration)} · ${state.info.channels > 1 ? 'stereo' : 'mono'}`;
   $('startBtn').disabled = false;
   $('startError').hidden = true;
+  prefetchModels();
   if (a.duration > 600) showError('This file is over 10 minutes. Pick a section below so it finishes in a reasonable time.');
   else if (IS_PHONE && a.duration > 420) showError('Long song for a phone. If it stops partway, pick a section below.');
 }
@@ -262,6 +279,7 @@ async function helperLink(L) {
   const info = await helperPing();
   if (source !== mine) return;
   if (!info) { helperInstallPanel(L); return; }
+  prefetchModels(); // in parallel with the song's download
   let cancelled = false;
   mine.cancel = () => { cancelled = true; };
   st.textContent = 'Getting the song…';
@@ -644,6 +662,7 @@ const buffersOf = (st) => {
 
 async function start(mode = null) {
   if (!state.file) return;
+  running = true; // stops any model prefetch: the run downloads what is still missing
   const opts = readOpts();
   if (!mode) {
     mode = {
@@ -688,8 +707,10 @@ async function start(mode = null) {
   const runOpts = {
     threads: mode.threads, gpu: mode.gpu, lite: mode.lite, notesModel: mode.notes || 'hr',
     isolate: opts.isolate, split: opts.split, tuning: opts.tuning, capo: opts.capo, range: null,
-    overlap: opts.quality === 'fast' ? 0.1 : 0.25,
-    hrHop: opts.quality === 'fast' ? 750 : 500,
+    // "balanced" separates with less overlap and steps the note model further: on GuitarSet
+    // with a band, notes F1 88.5 vs 88.7 for "best", about a third less work
+    overlap: opts.quality === 'best' ? 0.25 : 0.1,
+    hrHop: opts.quality === 'best' ? 500 : 750,
     preferTunings: favoriteTunings(),
     debugMem: DEBUG,
     forceGpu: FORCE_GPU,

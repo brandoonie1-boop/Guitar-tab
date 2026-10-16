@@ -90,7 +90,8 @@ export async function detectNotes(env, mono44, opts, cents, onProgress) {
   };
   if (hr) {
     const x16 = resample(mono44, DEMUCS.sr * r, HR.sr, 64, 0.958);
-    const act = await hrActivations(env.ort, hr, x16, { hop: opts.hrHop, onProgress: (f) => onProgress(share + (1 - share) * f), shouldCancel: env.cancelled });
+    // bigger chunks keep a graphics chip busy; small ones keep the processor's memory low
+    const act = await hrActivations(env.ort, hr, x16, { hop: opts.hrHop, chunk: hr.onGpu ? 500 : 250, onProgress: (f) => onProgress(share + (1 - share) * f), shouldCancel: env.cancelled });
     const found = hrNotes(act, { onsetThreshold: opts.hrOnset, offsetThreshold: opts.hrOffset, frameThreshold: opts.hrFrame });
     const last = model.nT - 1;
     const framed = found.map((n) => {
@@ -256,23 +257,29 @@ export async function analyzeStage(stems, userOpts = {}, env) {
   if (!parts.length) throw new Error('No guitar notes found in this file.');
   // drop a side part that just duplicates another (double-tracked guitars)
   if (parts.length > 1) dedupeParts(parts);
-  // 5. tuning + capo per part, then fingering
+  // 5. tuning + capo, judged from all the parts together (one song, one guitarist's setup as
+  //    a rule; each part can still be changed afterwards), then fingering per part.
+  //    The notes both detectors agree on (or that the transcription model is sure of) decide,
+  //    so a few distortion ghosts can't drag the tuning down.
+  const sureNotes = parts.map((p) => {
+    const sure = p.notes.filter((n) => !(n.hr && (n.support ?? 1) < 0.2 && (n.conf ?? 1) < 0.7));
+    return sure.length >= 0.5 * p.notes.length ? sure : p.notes;
+  });
+  const rank = rankSetups(sureNotes, {
+    tuning: opts.tuning || undefined,
+    capo: opts.capo ?? undefined,
+    preferTunings: opts.preferTunings,
+    onProgress: (f) => progress('setup', 0.8 * f, 'Working out tuning and capo'),
+  });
+  const ranking = rank.ranked.slice(0, 6).map((r) => ({
+    tuning: r.setup.tuning, capo: r.setup.capo, name: tuningName(r.setup.tuning), confidence: r.confidence,
+    equivalents: r.equivalents.filter((e) => e.prior > 0.02).slice(0, 3).map((e) => ({ tuning: e.tuning, capo: e.capo, name: tuningName(e.tuning) })),
+  }));
   for (let pi = 0; pi < parts.length; pi++) {
     const p = parts[pi];
-    // the tuning and capo are judged from the notes both detectors agree on (or that the
-    // transcription model is sure of), so a few distortion ghosts can't drag them down
-    const sure = p.notes.filter((n) => !(n.hr && (n.support ?? 1) < 0.2 && (n.conf ?? 1) < 0.7));
-    const rank = rankSetups(sure.length >= 0.5 * p.notes.length ? sure : p.notes, {
-      tuning: opts.tuning || undefined,
-      capo: opts.capo ?? undefined,
-      preferTunings: opts.preferTunings,
-      onProgress: (f) => progress('setup', (pi + f) / parts.length, 'Working out tuning and capo'),
-    });
-    p.ranking = rank.ranked.slice(0, 6).map((r) => ({
-      tuning: r.setup.tuning, capo: r.setup.capo, name: tuningName(r.setup.tuning), confidence: r.confidence,
-      equivalents: r.equivalents.filter((e) => e.prior > 0.02).slice(0, 3).map((e) => ({ tuning: e.tuning, capo: e.capo, name: tuningName(e.tuning) })),
-    }));
+    p.ranking = ranking.map((r) => ({ ...r, equivalents: r.equivalents.slice() }));
     applySetup(p, p.ranking[0]);
+    progress('setup', 0.8 + (0.2 * (pi + 1)) / parts.length, 'Working out tuning and capo');
   }
   // 6. rhythm grid + tab
   progress('tab', 0, 'Writing the tab');

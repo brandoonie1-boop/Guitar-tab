@@ -17,7 +17,10 @@ const inp = readF32(path.join(dir, 'sep_in.f32'));
 const n = inp.length / 2;
 const left = inp.slice(0, n), right = inp.slice(n);
 const opts = runtime === 'web' ? { executionProviders: ['wasm'], ...(process.env.SESS ? JSON.parse(process.env.SESS) : {}) } : { intraOpNumThreads: 2 };
-if (runtime === 'web') { ort.env.wasm.numThreads = Number(process.env.THREADS || 1); }
+if (runtime === 'web') {
+  ort.env.wasm.numThreads = Number(process.env.THREADS || 1);
+  ort.env.wasm.wasmBinary = fs.readFileSync('/home/claude/work/jsenv/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm');
+}
 let t0 = Date.now();
 // a packed chain (tools/pack_demucs.py) needs the shared weights file next to it (web runtime only)
 const session = onnxPath.endsWith('.chain')

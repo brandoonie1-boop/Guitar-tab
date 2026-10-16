@@ -111,7 +111,7 @@ function Start-Download([string]$url) {
   # progressive (plain HTTP) audio first: every browser can decode those files as they are
   $ytArgs = @('--no-playlist', '--no-warnings', '--newline', '--no-part', '--no-mtime', '--no-colors',
     '-f', 'bestaudio[ext=m4a][protocol^=http]/bestaudio[protocol^=http]/bestaudio[ext=m4a]/bestaudio/best',
-    '--max-filesize', '500M', '--write-info-json', '-o', (Q $out))
+    '--max-filesize', '500M', '--print-to-file', (Q '%(artist,creator|)s|%(track,title|)s'), (Q (Join-Path $dir 'title.txt')), '-o', (Q $out))
   if (Test-Path $Deno) { $ytArgs += @('--js-runtimes', (Q ('deno:' + $Deno))) }
   $ytArgs += @('--', (Q $r.target))
   $log = Join-Path $dir 'log.txt'
@@ -124,7 +124,7 @@ function Start-Download([string]$url) {
 }
 
 function Get-AudioFile($job) {
-  Get-ChildItem -Path $job.dir -File | Where-Object { $_.Name -like 'audio.*' -and $_.Name -notlike '*.info.json' -and $_.Name -notlike '*.part' -and $_.Name -notlike '*.ytdl' } | Select-Object -First 1
+  Get-ChildItem -Path $job.dir -File | Where-Object { $_.Name -like 'audio.*' -and $_.Name -notlike '*.part' -and $_.Name -notlike '*.ytdl' } | Select-Object -First 1
 }
 
 function Get-JobStatus($job) {
@@ -135,9 +135,13 @@ function Get-JobStatus($job) {
     $ms = [regex]::Matches($text, '\[download\]\s+([\d.]+)%')
     if ($ms.Count -gt 0) { $s.progress = [double]::Parse($ms[$ms.Count - 1].Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture) / 100 }
   }
-  $info = Get-ChildItem -Path $job.dir -Filter '*.info.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($info) {
-    try { $j = Get-Content -Raw -Encoding UTF8 $info.FullName | ConvertFrom-Json; if ($j.title) { $s.title = $(if ($j.artist -and $j.track) { "$($j.artist) - $($j.track)" } else { $j.title }) } } catch { }
+  $tf = Join-Path $job.dir 'title.txt'
+  if (Test-Path $tf) {
+    try {
+      $line = ((Get-Content -Encoding UTF8 $tf -ErrorAction Stop) | Select-Object -First 1) -as [string]
+      $ab = $line.Split(@('|'), 2, [StringSplitOptions]::None)
+      if ($ab.Length -eq 2 -and $ab[1].Trim()) { $s.title = $(if ($ab[0].Trim()) { $ab[0].Trim() + ' - ' + $ab[1].Trim() } else { $ab[1].Trim() }) }
+    } catch { }
   }
   if ($job.proc.HasExited) {
     $f = Get-AudioFile $job
@@ -188,7 +192,7 @@ function Get-Query([string]$target) {
 }
 
 function Handle-Client($client) {
-  $client.ReceiveTimeout = 5000
+  $client.ReceiveTimeout = 3000
   $client.SendTimeout = 60000
   $ns = $client.GetStream()
   $buf = New-Object byte[] 16384

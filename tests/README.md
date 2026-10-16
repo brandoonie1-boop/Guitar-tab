@@ -18,5 +18,6 @@ Development scripts used to check and tune the engine. They expect a local setup
 | `eval_gs_pipeline.mjs` | full pipeline on GuitarSet audio (optionally with drums and bass mixed in) |
 | `eval_tempo.mjs` | tempo and beat tracking on GuitarSet |
 | `sweep_*.mjs` | parameter searches used to tune the cost weights |
+| `helper_e2e.mjs` | the paste-a-link flow through the link helper (`helper/helper.ps1` running), in Chromium |
 | `browser_e2e.mjs` | runs the real app in headless Chromium / WebKit (iPhone engine) |
 | `run_file.mjs` | transcribe a WAV from the command line and print the tab |

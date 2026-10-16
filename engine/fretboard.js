@@ -35,7 +35,13 @@ export const FINGER_COSTS = {
 // open strings), then scores each setup from per-note features so long songs and short
 // clips are judged the same way.
 export const DETECT_COSTS = { ...FINGER_COSTS, fretted: 0.04 };
-export const DETECT_WEIGHTS = { cost: 1.0, prior: 0.7, open: 1.0, openTime: 0.0, drop: 4.0, excess: 4.0, theta: 0.45 }; // tuned: tests/sweep_detect2.mjs
+export const DETECT_WEIGHTS = {
+  cost: 1.0, prior: 0.7, open: 1.0, openTime: 0.0, drop: 4.0, excess: 4.0, theta: 0.45, // tuned: tests/sweep_detect2.mjs
+  // a whole song's evidence outweighs the same per-event evidence from a short clip: past n0
+  // attack events it counts up to gmax times as much (a 2:44 song in DAEABE capo 7 was read as
+  // standard tuning because the tuning's rarity outweighed 1000 events of clear evidence)
+  n0: 200, gmax: 2.5,
+};
 export const DEFAULT_COSTS = FINGER_COSTS;
 
 const NSTR = 6;
@@ -313,42 +319,67 @@ export function groupFeatures(notes, events, group, opts = {}) {
   return { costPerEvent: cost / Math.max(1, nEv), openRatio: open / Math.max(1, wsum), openTime: openT / Math.max(1, wsum), dropRatio: drop / Math.max(1, wsum) };
 }
 
-export function scoreGroup(f, prior, w = DETECT_WEIGHTS) {
+export function lengthGain(nEvents, w = DETECT_WEIGHTS) {
+  return Math.min(w.gmax ?? 1, Math.max(1, Math.sqrt(nEvents / (w.n0 ?? 200))));
+}
+
+export function scoreGroup(f, prior, w = DETECT_WEIGHTS, gain = 1) {
   // open strings only count as evidence for a capo / open tuning when they dominate the sound
   const excess = Math.max(0, f.openTime - (w.theta ?? 0.35));
-  return w.cost * f.costPerEvent + w.drop * f.dropRatio - w.open * f.openRatio - w.openTime * f.openTime - (w.excess || 0) * excess - w.prior * Math.log(prior);
+  return gain * (w.cost * f.costPerEvent + w.drop * f.dropRatio - w.open * f.openRatio - w.openTime * f.openTime - (w.excess || 0) * excess) - w.prior * Math.log(prior);
+}
+
+// event-weighted average of per-part features
+function combineFeatures(items) {
+  const n = items.reduce((t, x) => t + x.n, 0) || 1;
+  const out = { costPerEvent: 0, openRatio: 0, openTime: 0, dropRatio: 0 };
+  for (const x of items) for (const k of Object.keys(out)) out[k] += (x.f[k] * x.n) / n;
+  return out;
 }
 
 /**
  * Rank (tuning, capo) setups for a set of notes.
  * opts: { tuning?: number[], capo?: number, preferTunings?: string[] (keys "38,45,..."), onProgress }
  */
-export function rankSetups(notes, opts = {}) {
-  const events = buildEvents(notes);
-  if (!events.length) return { ranked: [], events };
+export function rankSetups(notesOrParts, opts = {}) {
+  // one list of notes, or several (the guitar parts of one song, judged together: same
+  // tuning and capo, evidence pooled; each part is still fingered on its own)
+  const lists = (Array.isArray(notesOrParts[0]) ? notesOrParts : [notesOrParts]).filter((ns) => ns && ns.length);
+  const evs = lists.map((ns) => buildEvents(ns));
+  const nTot = evs.reduce((t, e) => t + e.length, 0);
+  if (!nTot) return { ranked: [], events: evs[0] || [] };
   const w = { ...DETECT_WEIGHTS, ...(opts.weights || {}) };
-  const groups = candidateGroups(notes, opts);
-  const ranges = pickEventRanges(events.length, opts.quickEvents ?? 300);
+  const gain = lengthGain(nTot, w);
+  const groups = candidateGroups(lists.length === 1 ? lists[0] : lists.flat(), opts);
+  const quick = opts.quickEvents ?? 300;
+  const ranges = evs.map((e) => pickEventRanges(e.length, Math.max(60, Math.round((quick * e.length) / nTot))));
+  const features = (g, full) => combineFeatures(lists.map((ns, i) => ({
+    n: evs[i].length,
+    f: full
+      ? groupFeatures(ns, evs[i], g, { ranges: [[0, evs[i].length]], beam: 16, maxAssign: 20, detectCosts: opts.detectCosts })
+      : groupFeatures(ns, evs[i], g, { ranges: ranges[i], detectCosts: opts.detectCosts }),
+  })));
   let done = 0;
   for (const g of groups) {
-    g.f = groupFeatures(notes, events, g, { ranges, detectCosts: opts.detectCosts });
-    g.score = scoreGroup(g.f, g.prior, w);
+    g.f = features(g, false);
+    g.score = scoreGroup(g.f, g.prior, w, gain);
     done++;
     if (opts.onProgress && done % 8 === 0) opts.onProgress((0.6 * done) / groups.length);
   }
   groups.sort((a, b) => a.score - b.score);
   const top = groups.slice(0, opts.topK ?? 8);
-  if (events.length > (opts.quickEvents ?? 300)) {
+  if (nTot > quick) {
     let k = 0;
     for (const g of top) {
-      g.f = groupFeatures(notes, events, g, { ranges: [[0, events.length]], beam: 16, maxAssign: 20, detectCosts: opts.detectCosts });
-      g.score = scoreGroup(g.f, g.prior, w);
+      g.f = features(g, true);
+      g.score = scoreGroup(g.f, g.prior, w, gain);
       k++;
       if (opts.onProgress) opts.onProgress(0.6 + (0.4 * k) / top.length);
     }
     top.sort((a, b) => a.score - b.score);
   }
-  // confidence from score gaps (scores are per-event so a fixed temperature works)
+  // confidence from score gaps (per-event scores, so a fixed temperature works; longer songs
+  // weigh their evidence more and come out more decided)
   const temp = opts.temperature ?? 0.12;
   const z = top.map((g) => Math.exp(-(g.score - top[0].score) / temp));
   const zs = z.reduce((a, b) => a + b, 0);
@@ -359,7 +390,7 @@ export function rankSetups(notes, opts = {}) {
     score: g.score,
     confidence: z[i] / zs,
   }));
-  return { ranked, events };
+  return { ranked, events: evs[0] };
 }
 
 export { tuningName, TUNINGS };

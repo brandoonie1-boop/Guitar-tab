@@ -23,9 +23,9 @@ The first song downloads about 120 MB of models and engine files once (about 135
 
 - **Get a song in:**
   - *Choose a file*: any audio or video file (MP3, M4A, WAV, FLAC, a phone video...).
-  - *Paste a link* to an audio/video file and it downloads (if the site allows it).
-  - *YouTube link* (computer, Chrome or Edge): the video opens inside the app; press *Record the song*, choose *This tab* and keep *Share tab audio* on. The video plays from the start and the recording stops when it ends. YouTube doesn't let apps download its audio, so the app records it while it plays.
-  - *Spotify, SoundCloud, Bandcamp and other pages* (computer): open the song in another tab, press *Record*, and pick that tab with tab audio on (or on Windows, *Entire screen* with *Share system audio* for a desktop app).
+  - *Paste a link* (Windows computer): with the **Guitar Tab link helper** running, YouTube, YouTube Music, SoundCloud, Bandcamp, Vimeo and most other sites go straight in, and so do Spotify, Apple Music, Deezer and Tidal links (those services encrypt their audio, so the helper finds the same recording on YouTube by artist and title). Paste the link and the tab starts by itself. The first time, the app shows the one-time setup (one PowerShell line, about a minute). See [Link helper](#link-helper) below.
+  - Links straight to an audio/video file download without the helper when the site allows it.
+  - Without the helper (or on a Mac): press *Record* and pick the tab that plays the song with tab audio on (or on Windows, *Entire screen* with *Share system audio* for a desktop app).
   - *On iPhone*: use iPhone *Screen Recording* while the song plays in its app, then pick the recording with *Choose a file*. Or press *Record* / *Listen* and let the phone hear the song playing on another device or speaker.
   - Recordings stay on your device. Only record music you're allowed to use.
 - **Make the tab:** choose a file, then *Make the tab*. A 3-minute song takes roughly 3–7 minutes on a laptop's processor (much less when the browser can use the graphics chip) and longer on a phone. Pick a section (*Part of the song*) to go faster. On a phone, keep the screen on while it works.
@@ -35,6 +35,21 @@ The first song downloads about 120 MB of models and engine files once (about 135
 - **Practice:** play the original recording, the isolated guitar, or the tab itself (synth), at 50–100% speed, with looping. The cursor follows along.
 - **Export:** text tab (.txt), Guitar Pro (.gp, opens in Guitar Pro / TuxGuitar / MuseScore / Songsterr), MIDI, and the isolated guitar as .wav.
 - **Saved tabs** stay on the device you made them on.
+
+## Link helper
+
+Web pages can't download audio from YouTube and similar sites (those sites don't hand their audio to other pages), and doing it from a web server gets blocked and breaks the hosting rules. So the download happens on your own computer instead, with [yt-dlp](https://github.com/yt-dlp/yt-dlp):
+
+- **Set up (Windows 10/11, no admin rights):** in the app, paste a link and press *Copy setup command*, then paste it into PowerShell. Or run this in PowerShell:
+  ```
+  [Net.ServicePointManager]::SecurityProtocol=3072; iex ((New-Object Net.WebClient).DownloadString('https://guitar-tab.onrender.com/helper/install.ps1'))
+  ```
+  It puts `helper.ps1`, `yt-dlp.exe` and `deno.exe` (yt-dlp needs a JavaScript runtime for YouTube) in `%LOCALAPPDATA%\GuitarTabHelper`, adds a *Guitar Tab helper* shortcut to the desktop and Start menu, and starts it. Run the same line again to update.
+- **Use:** start the helper from the shortcut (a minimized window), then paste links in the app. The first time, the browser asks whether the site may use apps on this device: choose *Allow*.
+- **Safety:** it listens only on 127.0.0.1 (this computer), answers only the Guitar Tab page (every call needs a header that forces the browser's cross-site check, and the Host header is checked), takes only web links, and keeps only the last song. yt-dlp updates itself each time the helper starts. Only download music you're allowed to.
+- **Remove:** close the helper and delete `%LOCALAPPDATA%\GuitarTabHelper` and the two shortcuts.
+
+The helper is a plain PowerShell script ([helper/helper.ps1](helper/helper.ps1)); it also runs with PowerShell 7 on macOS/Linux next to a `yt-dlp` binary.
 
 ## If a run stops or the page reloads
 

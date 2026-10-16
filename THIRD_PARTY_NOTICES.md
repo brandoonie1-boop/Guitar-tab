@@ -10,6 +10,8 @@
 | [alphaTab](https://github.com/CoderLine/alphaTab) (Daniel Kuschny and contributors) | tab rendering, playback, Guitar Pro export (`vendor/alphatab/`) | Mozilla Public License 2.0 |
 | Bravura music font (Steinberg) | notation glyphs (`vendor/alphatab/font/`) | SIL Open Font License 1.1 |
 | Sonivox soundfont | synth playback (`vendor/alphatab/soundfont/`) | Apache License 2.0 (see `vendor/alphatab/soundfont/LICENSE`) |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | downloads songs from links, on the user's own computer; fetched by `helper/install.ps1`, not part of the app | The Unlicense (public domain) |
+| [Deno](https://deno.com/) | JavaScript runtime yt-dlp uses for YouTube; fetched by `helper/install.ps1`, not part of the app | MIT |
 | [GuitarSet](https://guitarset.weebly.com/) (Xi, Bittner, et al.) | evaluation only, not included | CC BY 4.0 |
 
 Unmodified copies of the alphaTab and soundfont license files are in `vendor/alphatab/`.

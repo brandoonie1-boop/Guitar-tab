@@ -95,6 +95,33 @@ export async function fetchAsset(key, onProgress) {
   return out || single;
 }
 
+/**
+ * Download assets into the cache ahead of time (while the user is still choosing options), one
+ * part at a time, skipping what is cached already. Stops between parts when shouldStop().
+ */
+export async function prefetchAssets(keys, { shouldStop } = {}) {
+  const m = await getManifest();
+  let cache = null;
+  try { cache = self.caches ? await caches.open('guitar-tab-assets-' + m.version) : null; } catch { cache = null; }
+  if (!cache) return;
+  for (const key of keys) {
+    const a = m.assets[key];
+    if (!a) continue;
+    for (const p of a.parts) {
+      if (shouldStop && shouldStop()) return;
+      const url = BASE + p;
+      try {
+        if (await cache.match(url + '#bytes')) continue;
+        const r = await fetch(url);
+        if (!r.ok) return;
+        const raw = new Uint8Array(await r.arrayBuffer());
+        const buf = a.enc === 'b64' ? decodeBase64(new TextDecoder().decode(raw)) : raw;
+        await cache.put(url + '#bytes', new Response(buf));
+      } catch { return; }
+    }
+  }
+}
+
 export async function hasAsset(key) {
   try { const m = await getManifest(); return !!m.assets[key]; } catch { return false; }
 }
