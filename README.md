@@ -78,6 +78,7 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 | Same, real electric guitar (EGSet12, never used for training) | true notes 73.4% → **83.3%**; transcribed notes 61.8% → **74.2%** |
 | Notes that come out completely right in the tab (pitch, timing, string and fret; F1) | GuitarSet 62.3 → **78.3**; with drums and bass 61.3 → **79.3**; EGSet12 53.6 → **64.5** |
 | Tuning + capo correct on standard-tuning takes, transcribed | GuitarSet 343 → **350** of 360; with drums and bass 38 → **40** of 40; EGSet12 12 of 12 |
+| Overdriven guitar (GuitarSet through a simulated amp, 20 takes): tuning + capo correct / notes completely right (F1) | mild 19 → **20** of 20 / 64.1 → **73.1**; heavy 8 → **16** of 20 / 22.7 → **44.4** (heavy distortion's made-up low notes used to pass for drop D) |
 | Brave Bird, *Too Late Now* (the real recording, DAEABE capo 7) | tuning and capo right for all three guitar parts, 96% sure (measured with the previous version) |
 | DAEABE capo 7 test song (Brave Bird style arpeggios, `tools/synth_song.py`) | tuning and capo right for the guitar alone (the previous version said standard tuning) and for the full band mix; string/fret 97% / 96% |
 | Tuning + capo correct on test riffs in DAEABE, FACGCE, open D, drop D, Eb, capo 2/3/7 | 9 of 10 (DADGAD capo 2 was mistaken for standard) |
@@ -89,7 +90,7 @@ Things it cannot know for sure:
 - **The capo.** A capo can't be heard. Many tuning/capo combinations sound exactly the same (standard with capo 2 = D standard with capo 4), and the tab numbers come out identical for those, so you can play it either way. The app picks the most likely setup and shows the others.
 - **Which string, every time.** The same note can often be played in 2–4 places. The app listens for it (about 9 in 10 notes land where the player had them on the acoustic guitar recordings above, 3 in 4 on the electric ones) and otherwise goes by what's comfortable; tap a note to move it. Electric guitars are harder: their lighter strings and plain G string sound different from the acoustic recordings most of the training data comes from, so the app also learns each recording's strings from the song itself.
 - **Low guitar notes under a bass guitar** can get pulled into the bass during isolation and go missing.
-- **Heavy distortion on full chords** creates tones nobody played (differences between the chord's notes), and some come out as extra low notes. The tuning and capo are judged only from notes both note detectors agree on, but expect more cleanup on very distorted parts.
+- **Heavy distortion on full chords** creates tones nobody played (differences between the chord's notes), and some come out as extra low notes, an octave below a power chord. The tuning and capo are judged only from notes both note detectors agree on, leaving out low notes that look like such ghosts (no fifth right above them, as a real drop-tuned low note has), but expect more cleanup on very distorted parts: about two in three notes are found there.
 - Two guitars that sit in the middle of the mix can't be pulled apart; they come out as one part.
 
 ## How it works

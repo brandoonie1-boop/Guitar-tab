@@ -21,7 +21,7 @@ import { hrNotes } from '../engine/hrgt.js';
 import { cleanNotes } from '../engine/notes.js';
 import { rankSetups, assignFingering, buildEvents } from '../engine/fretboard.js';
 import { stringModel, attachStringEvidence, placeLogProbs } from '../engine/strings.js';
-import { applySetup, DEFAULT_OPTS } from '../engine/pipeline.js';
+import { applySetup, notesForTuning, DEFAULT_OPTS } from '../engine/pipeline.js';
 
 const STD = [40, 45, 50, 55, 59, 64];
 const args = process.argv.slice(2);
@@ -80,7 +80,7 @@ for (const name of names) {
     const mono = w.channels.length > 1 ? Float32Array.from(w.channels[0], (v, i) => 0.5 * (v + w.channels[1][i])) : w.channels[0];
     attachStringEvidence(notes, w.sr === 44100 ? mono : resample(mono, w.sr, 44100), 0, model);
   }
-  const setup = args.includes('--detect') ? rankSetups([notes], { stringModel: model }).ranked[0].setup : { tuning: STD, capo: 0 };
+  const setup = args.includes('--detect') ? rankSetups([notesForTuning(notes)], { stringModel: model }).ranked[0].setup : { tuning: STD, capo: 0 };
   if (args.includes('--direct')) {
     const fa = assignFingering(notes, buildEvents(notes), setup, { beam: 48, audio: model ? placeLogProbs(model, notes, setup) : null });
     notes.forEach((n, i) => { const a = fa.assign.get(i); n.string = a ? a.string : null; n.fret = a ? a.fret : null; });

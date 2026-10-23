@@ -265,11 +265,7 @@ export async function analyzeStage(stems, userOpts = {}, env) {
   //    a rule; each part can still be changed afterwards), then fingering per part.
   //    The notes both detectors agree on (or that the transcription model is sure of) decide,
   //    so a few distortion ghosts can't drag the tuning down.
-  const sureNotes = parts.map((p) => {
-    const sure = p.notes.filter((n) => !(n.hr && (n.support ?? 1) < 0.2 && (n.conf ?? 1) < 0.7));
-    return sure.length >= 0.5 * p.notes.length ? sure : p.notes;
-  });
-  const rank = rankSetups(sureNotes, {
+  const rank = rankSetups(parts.map((p) => notesForTuning(p.notes)), {
     tuning: opts.tuning || undefined,
     capo: opts.capo ?? undefined,
     preferTunings: opts.preferTunings,
@@ -315,6 +311,40 @@ export function mixForBeats(left, right) {
 export async function transcribe(audio, userOpts = {}, env) {
   const stems = await separateStage(audio, userOpts, env);
   return analyzeStage(stems, userOpts, env);
+}
+
+/**
+ * The notes that decide the tuning and capo: the ones both note detectors agree on (or that
+ * the transcription model is sure of), without the low notes distortion makes up.
+ */
+export function notesForTuning(notes) {
+  const ghosts = distortionGhosts(notes);
+  const sure = notes.filter((n) => !ghosts.has(n) && !(n.hr && (n.support ?? 1) < 0.2 && (n.conf ?? 1) < 0.7));
+  return sure.length >= 0.5 * notes.length ? sure : notes;
+}
+
+/**
+ * Low notes that distortion makes up: two notes a fifth apart (a power chord) give a difference
+ * tone an octave below the lower one, which the note models hear as a note with the chord an
+ * octave and a twelfth above it. A real low note in a drop or down tuning has its fifth right
+ * above it instead (D2 under A2 + D3). Notes below the standard low E that look like such ghosts
+ * don't get a say in the tuning (they would make it look like drop D or lower).
+ */
+export function distortionGhosts(notes, below = 40) {
+  const ghosts = new Set();
+  const byStart = notes.slice().sort((a, b) => a.t0 - b.t0);
+  let j = 0;
+  for (const n of byStart) {
+    if (n.pitch >= below) continue;
+    while (j < byStart.length && byStart[j].t0 < n.t0 - 0.06) j++;
+    let up12 = false, up19 = false, up7 = false;
+    for (let k = j; k < byStart.length && byStart[k].t0 <= n.t0 + 0.06; k++) {
+      const d = byStart[k].pitch - n.pitch;
+      if (d === 12) up12 = true; else if (d === 19) up19 = true; else if (d === 7) up7 = true;
+    }
+    if ((up12 || up19) && !up7) ghosts.add(n);
+  }
+  return ghosts;
 }
 
 function dedupeParts(parts) {
