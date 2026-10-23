@@ -9,6 +9,7 @@ import { estimateTuningCents } from './pitchref.js';
 import { splitStereo, chooseParts } from './stereo.js';
 import { cleanNotes } from './notes.js';
 import { rankSetups, assignFingering, buildEvents } from './fretboard.js';
+import { attachStringEvidence, defaultStringModel, placeLogProbs, stiffnessEvidence } from './strings.js';
 import { detectTechniques } from './techniques.js';
 import { quantize, extendBeats, beatPos } from './rhythm.js';
 import { toAlphaTex, toAscii } from './export.js';
@@ -240,6 +241,7 @@ export async function analyzeStage(stems, userOpts = {}, env) {
   const tuningRef = estimateTuningCents(guitarMono, sr);
   guitarMono = null;
   const cents = tuningRef.confidence > 0.15 ? tuningRef.cents : 0;
+  const sModel = opts.stringEvidence === false ? null : env.stringModel !== undefined ? env.stringModel : defaultStringModel();
   const parts = [];
   for (let pi = 0; pi < partDefs.length; pi++) {
     const pd = partDefs[pi];
@@ -249,12 +251,14 @@ export async function analyzeStage(stems, userOpts = {}, env) {
     // the transcription model hears re-attacks itself; basic-pitch's need the re-trigger check
     const hrNotesFound = raw.length > 0 && raw[0].hr;
     const notes = cleanNotes(raw, { idPrefix: pd.id + ':', mergeFragments: !hrNotesFound, mergeRetrigger: hrNotesFound ? false : opts.mergeRetrigger, retriggerRatio: opts.retriggerRatio, retriggerAbs: opts.retriggerAbs });
-    if (notes.length < 3 && partDefs.length > 1) continue;
+    if (!notes.length || (notes.length < 3 && partDefs.length > 1)) continue;
+    // how each note sounds tells which string it was played on (kept on the notes, n.sv)
+    if (sModel) attachStringEvidence(notes, pd.audio, cents, sModel);
     // a single part's audio is the guitar stem itself; only split parts keep theirs (for playback)
     parts.push({ id: pd.id, name: pd.name, audio: partDefs.length > 1 ? pd.audio : null, notes });
   }
   partDefs = null;
-  if (!parts.length) throw new Error('No guitar notes found in this file.');
+  if (!parts.length) throw new Error(opts.isolate === 'guitar' ? 'No guitar notes found in this file. If it has a guitar, try "Full song, wider net" (or "Just guitar" for a guitar on its own).' : 'No guitar notes found in this file.');
   // drop a side part that just duplicates another (double-tracked guitars)
   if (parts.length > 1) dedupeParts(parts);
   // 5. tuning + capo, judged from all the parts together (one song, one guitarist's setup as
@@ -269,6 +273,7 @@ export async function analyzeStage(stems, userOpts = {}, env) {
     tuning: opts.tuning || undefined,
     capo: opts.capo ?? undefined,
     preferTunings: opts.preferTunings,
+    stringModel: sModel,
     onProgress: (f) => progress('setup', 0.8 * f, 'Working out tuning and capo'),
   });
   const ranking = rank.ranked.slice(0, 6).map((r) => ({
@@ -278,7 +283,7 @@ export async function analyzeStage(stems, userOpts = {}, env) {
   for (let pi = 0; pi < parts.length; pi++) {
     const p = parts[pi];
     p.ranking = ranking.map((r) => ({ ...r, equivalents: r.equivalents.slice() }));
-    applySetup(p, p.ranking[0]);
+    applySetup(p, p.ranking[0], sModel);
     progress('setup', 0.8 + (0.2 * (pi + 1)) / parts.length, 'Working out tuning and capo');
   }
   // 6. rhythm grid + tab
@@ -337,10 +342,21 @@ function dedupeParts(parts) {
 }
 
 /** (Re)assign strings/frets for a part with a chosen setup {tuning, capo}. */
-export function applySetup(part, setup) {
+export function applySetup(part, setup, model = defaultStringModel()) {
   part.setup = { tuning: setup.tuning.slice(), capo: setup.capo, name: tuningName(setup.tuning) };
   const events = buildEvents(part.notes);
-  const fa = assignFingering(part.notes, events, part.setup, { beam: 48 });
+  // the notes' sound (when it was measured) weighs in on which string each one is on
+  let audio = model && part.notes.some((n) => n.sv) ? placeLogProbs(model, part.notes, part.setup) : null;
+  let fa = assignFingering(part.notes, events, part.setup, { beam: 48, audio });
+  // then learn this guitar's strings from that fingering and finger again (twice)
+  if (audio) {
+    const base = audio;
+    for (let it = 0; it < 2; it++) {
+      audio = stiffnessEvidence(part.notes, part.setup, base, fa.assign);
+      if (audio === base) break; // nothing to learn (wound G string, or too few notes)
+      fa = assignFingering(part.notes, events, part.setup, { beam: 48, audio });
+    }
+  }
   part.notes.forEach((n, i) => {
     const a = fa.assign.get(i);
     if (a) { n.string = a.string; n.fret = a.fret; n.dropped = false; }

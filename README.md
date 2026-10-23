@@ -6,7 +6,7 @@ Turn any song into guitar tab. Drop in an audio or video file, paste a link, or 
 2. hears the notes, including bends,
 3. finds the beat and the bar lines (including songs that change meter),
 4. works out the tuning, the capo position and how far the recording is from A440,
-5. picks strings and frets the way a player would, and writes the tab.
+5. listens to which string each note was played on (a note sounds different on a thicker string higher up the neck), weighs that against what's comfortable to play, and writes the tab.
 
 Everything runs on your own device, in the browser. Nothing is uploaded anywhere.
 
@@ -72,10 +72,14 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 | Notes found, guitar on its own (onset F1, 40 takes) | 90%: chord comping 89.5%, single-note lines 91.6% (basic-pitch, the previous note detector: 79%) |
 | Notes found with drums and bass mixed in, after isolation (16 takes) | 88.7% (basic-pitch: 78.4%) |
 | Notes found on overdriven guitar (GuitarSet run through a simulated amp, 24 takes) | mild 81%, heavy 65% (basic-pitch: 74%, 60%) |
-| String/fret matches what the player used (true notes / transcribed notes with a band) | 80% / 68% |
-| Tuning + capo correct on standard-tuning takes | about 19 in 20 (116 of 120 from the true notes, 15 of 16 transcribed with a band) |
-| Brave Bird, *Too Late Now* (the real recording, DAEABE capo 7) | tuning and capo right for all three guitar parts, 96% sure (before this version: standard tuning) |
-| DAEABE capo 7 test song (Brave Bird style arpeggios) | tuning and capo right; notes 99% and string/fret 97% for the guitar alone, notes 85% and string/fret 100% for the full band mix |
+| Notes found, real electric guitar ([EGSet12](https://zenodo.org/records/11406378): a Telecaster through an amp, 12 takes) | 86.9% |
+| String/fret matches what the player used, from the notes alone → now also from how each note sounds (all 360 takes; every player judged by a string model that never heard them) | true notes 75.4% → **91.3%**; transcribed notes 72.7% → **90.5%** |
+| Same, with drums and bass mixed in, after isolation (40 takes) | 72.0% → **88.9%** |
+| Same, real electric guitar (EGSet12, never used for training) | true notes 73.4% → **83.3%**; transcribed notes 61.8% → **74.2%** |
+| Notes that come out completely right in the tab (pitch, timing, string and fret; F1) | GuitarSet 62.3 → **78.3**; with drums and bass 61.3 → **79.3**; EGSet12 53.6 → **64.5** |
+| Tuning + capo correct on standard-tuning takes, transcribed | GuitarSet 343 → **350** of 360; with drums and bass 38 → **40** of 40; EGSet12 12 of 12 |
+| Brave Bird, *Too Late Now* (the real recording, DAEABE capo 7) | tuning and capo right for all three guitar parts, 96% sure (measured with the previous version) |
+| DAEABE capo 7 test song (Brave Bird style arpeggios, `tools/synth_song.py`) | tuning and capo right for the guitar alone (the previous version said standard tuning) and for the full band mix; string/fret 97% / 96% |
 | Tuning + capo correct on test riffs in DAEABE, FACGCE, open D, drop D, Eb, capo 2/3/7 | 9 of 10 (DADGAD capo 2 was mistaken for standard) |
 | Tempo correct (with drums and bass) | 37 of 40 takes (was 32 before the beat model); beat F-measure 0.98 |
 | Bar lines (downbeats) in the right place | F-measure 0.78 (was 0.30) |
@@ -83,7 +87,7 @@ Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the
 Things it cannot know for sure:
 
 - **The capo.** A capo can't be heard. Many tuning/capo combinations sound exactly the same (standard with capo 2 = D standard with capo 4), and the tab numbers come out identical for those, so you can play it either way. The app picks the most likely setup and shows the others.
-- **Which string.** The same note can often be played in 2–4 places. The fingering is a best guess at what's comfortable; tap a note to move it.
+- **Which string, every time.** The same note can often be played in 2–4 places. The app listens for it (about 9 in 10 notes land where the player had them on the acoustic guitar recordings above, 3 in 4 on the electric ones) and otherwise goes by what's comfortable; tap a note to move it. Electric guitars are harder: their lighter strings and plain G string sound different from the acoustic recordings most of the training data comes from, so the app also learns each recording's strings from the song itself.
 - **Low guitar notes under a bass guitar** can get pulled into the bass during isolation and go missing.
 - **Heavy distortion on full chords** creates tones nobody played (differences between the chord's notes), and some come out as extra low notes. The tuning and capo are judged only from notes both note detectors agree on, but expect more cleanup on very distorted parts.
 - Two guitars that sit in the middle of the mix can't be pulled apart; they come out as one part.
@@ -97,7 +101,8 @@ Things it cannot know for sure:
 | Notes | a high-resolution guitar transcription model ([Riley, Edwards & Dixon, ICASSP 2024](https://arxiv.org/abs/2402.15258), weights trained on the François Leduc guitar recordings, never on GuitarSet) on [Kong et al.'s](https://github.com/qiuqiangkong/piano_transcription_inference) onset/offset-regression network: exported to ONNX as four convolution parts and a recurrent head, log-mel front end and note decoding in JS. The convolutions run once per frame in short chunks (on the graphics chip when there is one); the recurrent head runs on overlapping 10 s windows as it was trained. Spotify [basic-pitch](https://github.com/spotify/basic-pitch) adds the pitch-bend tracks, and is the light fallback |
 | Beats and bar lines | [Beat This!](https://github.com/CPJKU/beat_this) small model (ISMIR 2024) on the mix, with its log-mel front end in JS; bar lines by a Viterbi over bar lengths 3–7 scored by its downbeat output (falls back to an onset-envelope tracker) |
 | Pitch reference | spectral peak histogram (cents from A440); corrected before note detection |
-| Strings, frets, tuning, capo | beam search over hand positions, ringing strings, stretches and open strings; every candidate tuning × capo is scored by how naturally the music lays out on it |
+| Which string, from the sound | for every note, its first 24 overtones in three snapshots after the attack (level, how sharp each runs, a fitted inharmonicity coefficient), skipping overtones that collide with other notes; a small network (`engine/strings.js`, trained by `tools/train_strings.py` on [GuitarSet](https://guitarset.weebly.com/) and [Guitar-TECHS](https://zenodo.org/records/14963133) with random tone changes) scores each place on the neck the note could be played. After a first fingering pass, each string's stiffness is fitted from the recording itself and the notes are fingered again (electric guitars with a plain G string) |
+| Strings, frets, tuning, capo | beam search over hand positions, ringing strings, stretches and open strings, plus what the sound says about each note's string; every candidate tuning × capo is scored by how naturally the music lays out on it and how well it fits the sound |
 | Rendering, playback, Guitar Pro | [alphaTab](https://www.alphatab.net/) |
 | Runtime | [ONNX Runtime Web](https://onnxruntime.ai/) (WebAssembly, multi-threaded when the service worker enables cross-origin isolation) |
 

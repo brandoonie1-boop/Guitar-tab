@@ -1325,6 +1325,7 @@ function editPitch(n, d) {
   if (!best) { toast('That note is out of range for this tuning.'); return; }
   pushUndo();
   n.pitch = np; n.string = best.s; n.fret = best.f; n.pin = best.s;
+  delete n.sv; delete n.sb; // its sound was measured at the old pitch
   applyTech(p);
   closeSheet();
   relayout();

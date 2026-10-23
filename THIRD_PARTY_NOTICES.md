@@ -12,7 +12,9 @@
 | Sonivox soundfont | synth playback (`vendor/alphatab/soundfont/`) | Apache License 2.0 (see `vendor/alphatab/soundfont/LICENSE`) |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | downloads songs from links, on the user's own computer; fetched by `helper/install.ps1`, not part of the app | The Unlicense (public domain) |
 | [Deno](https://deno.com/) | JavaScript runtime yt-dlp uses for YouTube; fetched by `helper/install.ps1`, not part of the app | MIT |
-| [GuitarSet](https://guitarset.weebly.com/) (Xi, Bittner, et al.) | evaluation only, not included | CC BY 4.0 |
+| [GuitarSet](https://guitarset.weebly.com/) (Xi, Bittner, et al.) | training data for the string classifier (`engine/strings-model.js` holds weights learned from it; no recordings included) and evaluation | CC BY 4.0 |
+| [Guitar-TECHS](https://zenodo.org/records/14963133) (Pedroza, Abreu, Corey, Roman; ICASSP 2025) | training data for the string classifier (weights only; no recordings included) | CC BY 4.0 |
+| [EGSet12](https://zenodo.org/records/11406378) | evaluation only, not included | CC BY 4.0 |
 
 Unmodified copies of the alphaTab and soundfont license files are in `vendor/alphatab/`.
 

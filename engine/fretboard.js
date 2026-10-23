@@ -8,6 +8,7 @@
 // easiest and most natural to play - the same reasoning a person uses by ear.
 
 import { candidateSetups, soundingOpen, tuningName, TUNINGS, STANDARD } from './tunings.js';
+import { placeLogProbs } from './strings.js';
 
 export const FINGER_COSTS = {
   // tuned on GuitarSet: real players' string choices, on both annotated and transcribed notes
@@ -29,6 +30,11 @@ export const FINGER_COSTS = {
   // with a capo or an open/alternate tuning players lean on the open strings (that is what
   // the tuning or capo is for): fretting a note that could ring open costs this much there
   openBias: 0.1,
+  // the sound of each note (engine/strings.js): cost per unit of log-probability below the
+  // string it most likely came from, capped (tuned on GuitarSet with held-out players and on
+  // EGSet12: tests/eval_strings.mjs)
+  audio: 0.1,
+  audioCap: 10,
 };
 
 // Setup detection fingers the notes with the same profile (plus a slight tie-break toward
@@ -86,13 +92,23 @@ function noteCost(f, costs) {
   return costs.fretted + costs.fretHeight * f + (f > 12 ? costs.highFret * (f - 12) : 0);
 }
 
-/** enumerate assignments of an event's new notes to distinct strings (or drop) */
-function enumerateAssignments(evNotes, notes, setup, costs, maxOut) {
+/**
+ * enumerate assignments of an event's new notes to distinct strings (or drop)
+ * @param audio optional per-note log-probabilities of each string from the sound (engine/strings.js)
+ */
+function enumerateAssignments(evNotes, notes, setup, costs, maxOut, audio) {
   const opts = evNotes.map((i) => {
-    const all = positions(notes[i].pitch, setup, costs);
+    let all = positions(notes[i].pitch, setup, costs);
     // a string the user picked by hand is kept when it still works
     const pin = notes[i].pin;
-    if (pin != null) { const p = all.filter((q) => q.s === pin); if (p.length) return p; }
+    if (pin != null) { const p = all.filter((q) => q.s === pin); if (p.length) all = p; }
+    // what the sound says about each string, relative to the most likely one
+    const lp = audio && audio[i];
+    if (lp && costs.audio > 0 && all.length > 1) {
+      let best = -Infinity;
+      for (const q of all) if (lp[q.s] > best) best = lp[q.s];
+      if (best > -Infinity) all = all.map((q) => ({ s: q.s, f: q.f, a: costs.audio * Math.min(costs.audioCap, best - lp[q.s]) }));
+    }
     return all;
   });
   const results = [];
@@ -138,7 +154,7 @@ function enumerateAssignments(evNotes, notes, setup, costs, maxOut) {
       if (used[p.s]) continue;
       used[p.s] = true;
       cur[k] = p;
-      rec(k + 1, cost + noteCost(p.f, costs), nDrop);
+      rec(k + 1, cost + noteCost(p.f, costs) + (p.a || 0), nDrop);
       used[p.s] = false;
     }
     cur[k] = null;
@@ -218,7 +234,7 @@ export function assignFingering(notes, events, setup, opts = {}) {
   };
   for (let ei = evRange[0]; ei < evRange[1]; ei++) {
     const ev = events[ei];
-    const assigns = enumerateAssignments(ev.notes, notes, setup, costs, maxAssign);
+    const assigns = enumerateAssignments(ev.notes, notes, setup, costs, maxAssign, opts.audio);
     const n = beam.length * assigns.length;
     if (n > cap) { cap = n; cCost = new Float64Array(n); cKey = new Float64Array(n); cSt = new Int32Array(n); cA = new Int32Array(n); }
     // best candidate per state key, keys in order of first appearance (as a Map keeps them)
@@ -309,9 +325,11 @@ export function candidateGroups(notes, opts = {}) {
 export function groupFeatures(notes, events, group, opts = {}) {
   const costs = { ...DETECT_COSTS, ...(opts.detectCosts || {}) };
   const ranges = opts.ranges || [[0, events.length]];
+  // what the notes' sound says about the strings they were played on, for this setup
+  const audio = opts.stringModel && costs.audio > 0 ? placeLogProbs(opts.stringModel, notes, group.members[0]) : null;
   let cost = 0, nEv = 0, open = 0, openT = 0, drop = 0, wsum = 0;
   for (const r of ranges) {
-    const res = assignFingering(notes, events, group.members[0], { beam: opts.beam ?? 8, maxAssign: opts.maxAssign ?? 14, eventRange: r, costs });
+    const res = assignFingering(notes, events, group.members[0], { beam: opts.beam ?? 8, maxAssign: opts.maxAssign ?? 14, eventRange: r, costs, audio });
     const n = r[1] - r[0];
     cost += res.cost; nEv += n;
     open += res.stats.openRatio * n; openT += res.stats.openTime * n; drop += res.stats.dropRatio * n; wsum += n;
@@ -356,8 +374,8 @@ export function rankSetups(notesOrParts, opts = {}) {
   const features = (g, full) => combineFeatures(lists.map((ns, i) => ({
     n: evs[i].length,
     f: full
-      ? groupFeatures(ns, evs[i], g, { ranges: [[0, evs[i].length]], beam: 16, maxAssign: 20, detectCosts: opts.detectCosts })
-      : groupFeatures(ns, evs[i], g, { ranges: ranges[i], detectCosts: opts.detectCosts }),
+      ? groupFeatures(ns, evs[i], g, { ranges: [[0, evs[i].length]], beam: 16, maxAssign: 20, detectCosts: opts.detectCosts, stringModel: opts.stringModel })
+      : groupFeatures(ns, evs[i], g, { ranges: ranges[i], detectCosts: opts.detectCosts, stringModel: opts.stringModel }),
   })));
   let done = 0;
   for (const g of groups) {
