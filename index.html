@@ -93,7 +93,7 @@ a.btn { text-decoration: none; }
 .drop p { margin: 0; color: var(--muted); max-width: 60ch; }
 .picked { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
 .link-row { display: flex; gap: 8px; width: 100%; max-width: 640px; }
-.link-row input { flex: 1; min-width: 0; min-height: 44px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); padding: 0 12px; }
+.link-row input { flex: 1; min-width: 0; width: 0; /* its default 20-character width made phone pages scroll sideways */ min-height: 44px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); padding: 0 12px; }
 .source { width: 100%; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
 .source h2 { font-size: 16px; }
 .source p, .source ol { margin: 0; color: var(--fg); max-width: 65ch; }
@@ -420,6 +420,6 @@ button.fact:hover { border-color: var(--accent); }
   </div>
 </div>
 
-<script type="module" src="app/main.js?v=72296e8730"></script>
+<script type="module" src="app/main.js?v=f560862818"></script>
 </body>
 </html>
