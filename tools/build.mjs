@@ -57,7 +57,8 @@ fs.writeFileSync(r('assets.json'), JSON.stringify(manifest, null, 1));
 
 const css = fs.readFileSync(r('app/styles.css'), 'utf8');
 const body = fs.readFileSync(r('app/body.html'), 'utf8');
-const pwaHead = `<meta name="theme-color" content="#2c5fb3">
+const pwaHead = `<meta name="theme-color" content="#f4f6f9">
+<meta name="color-scheme" content="only light">
 <meta name="description" content="Turn any song into guitar tab. Isolates the guitar, works out the tuning and capo, and writes the tab, right in your browser.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png" sizes="192x192">

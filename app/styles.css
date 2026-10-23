@@ -15,19 +15,9 @@
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, Menlo, monospace;
   --radius: 10px;
+  /* always light, also when the device is set to dark mode ("only" keeps browsers from darkening it themselves) */
   color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0f1217; --surface: #171b22; --surface-2: #1f242d; --fg: #e7ebf1; --muted: #9aa5b5; --line: #2b313c;
-    --accent: #79a3ea; --accent-fg: #0b0e13; --accent-soft: #1f2e48; --good: #5cc28a; --warn: #e0a24a; --bad: #f07178;
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #0f1217; --surface: #171b22; --surface-2: #1f242d; --fg: #e7ebf1; --muted: #9aa5b5; --line: #2b313c;
-  --accent: #79a3ea; --accent-fg: #0b0e13; --accent-soft: #1f2e48; --good: #5cc28a; --warn: #e0a24a; --bad: #f07178;
-  color-scheme: dark;
+  color-scheme: only light;
 }
 
 * { box-sizing: border-box; }

@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Guitar Tab</title>
-<meta name="theme-color" content="#2c5fb3">
+<meta name="theme-color" content="#f4f6f9">
+<meta name="color-scheme" content="only light">
 <meta name="description" content="Turn any song into guitar tab. Isolates the guitar, works out the tuning and capo, and writes the tab, right in your browser.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png" sizes="192x192">
@@ -31,19 +32,9 @@
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, Menlo, monospace;
   --radius: 10px;
+  /* always light, also when the device is set to dark mode ("only" keeps browsers from darkening it themselves) */
   color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0f1217; --surface: #171b22; --surface-2: #1f242d; --fg: #e7ebf1; --muted: #9aa5b5; --line: #2b313c;
-    --accent: #79a3ea; --accent-fg: #0b0e13; --accent-soft: #1f2e48; --good: #5cc28a; --warn: #e0a24a; --bad: #f07178;
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #0f1217; --surface: #171b22; --surface-2: #1f242d; --fg: #e7ebf1; --muted: #9aa5b5; --line: #2b313c;
-  --accent: #79a3ea; --accent-fg: #0b0e13; --accent-soft: #1f2e48; --good: #5cc28a; --warn: #e0a24a; --bad: #f07178;
-  color-scheme: dark;
+  color-scheme: only light;
 }
 
 * { box-sizing: border-box; }
@@ -429,6 +420,6 @@ button.fact:hover { border-color: var(--accent); }
   </div>
 </div>
 
-<script type="module" src="app/main.js?v=c92b37436e"></script>
+<script type="module" src="app/main.js?v=72296e8730"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 // Service worker: offline app shell + cross-origin isolation (needed for multi-threaded processing).
 // Big model files are cached by the processing worker itself (Cache Storage), on first use.
-const VERSION = 'gt-shell-c92b37436e';
+const VERSION = 'gt-shell-72296e8730';
 const SHELL = [
  "./",
  "./index.html",
