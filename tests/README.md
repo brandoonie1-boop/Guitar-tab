@@ -32,11 +32,19 @@ Note model fine-tuned for distortion, from data to numbers (PyTorch CPU build, `
 
 ```
 python tools/hrgt_data.py gtechs Guitar-TECHS nd/gtechs                # recordings with their MIDI lined up
+python tools/hrgt_data.py gs-anchor gs.json GuitarSet/audio nd/gs_anchor  # clean acoustic, no annotations
 python tools/gtechs_notes.py Guitar-TECHS gt_notes                     # one recorded note per string and fret
 python tools/synth_riffs.py gt_notes nd/synth --minutes 150            # riffs, chords and lines with exact notes
-python tools/train_hrgt.py guitar-fl.pth runs/ft --data nd/gtechs:0.6:0.5:1 --data nd/synth:0.4:1:0 \
-  --cabs assets/sound-cabs-<sha>.0.bin --gs gs.json:GuitarSet/audio --batch 2
-python tools/export_hrgt.py runs/ft/step_<n>.pt models/hrgt_ft --check some_guitar.wav
+# the shipped model: one run in three stages, each resuming from runs/ft/last.pt (about 14 s a step)
+C="--cabs assets/sound-cabs-<sha>.0.bin --gs gs.json:GuitarSet/audio --batch 2 --steps 1200 --val-every 200"
+python tools/train_hrgt.py guitar-fl.pth runs/ft $C --lr 5e-5 --data nd/gtechs:0.6:0.5:1 --data nd/synth:0.4:1:0      # to step 250
+python tools/train_hrgt.py guitar-fl.pth runs/ft $C --lr 5e-5 --data nd/gtechs:0.6:0.5:1 --data nd/synth:0.4:1:0 \
+  --data nd/gs_anchor:0.25:0:0:1                                                                                  # to step 400
+python tools/train_hrgt.py guitar-fl.pth runs/ft $C --lr 3e-5 --data nd/gtechs:0.6:0.25:1 --data nd/synth:0.4:0.5:0 \
+  --data nd/gs_anchor:0.6:0:0:1                                                                                   # to step 800
+python tools/blend_hrgt.py average runs/ft/step_600.pt runs/ft/step_800.pt runs/ft/avg_600_800.pt
+python tools/blend_hrgt.py guitar-fl.pth runs/ft/avg_600_800.pt 0.7 hrgt_ft.pt
+python tools/export_hrgt.py hrgt_ft.pt models/hrgt_ft --check some_guitar.wav
 python tools/finish_parts.py models/hrgt_ft
 python tools/pack_demucs.py --out models/packed --weights hrgt.weights.bin --name hrgt.chain --f16 models/hrgt_ft
 node tests/eval_notes.mjs models gs.json GuitarSet/audio --suffix _mic --every 3                # clean
@@ -45,7 +53,7 @@ node tests/eval_notes.mjs models egset.json EGSet12 --fx amp:20 --write-wav egse
 node tests/eval_strings.mjs egset egset.json egset_amp20 models/acts/egset_amp20_h500 default --detect
 ```
 
-Training validates on takes the tests don't use (Guitar-TECHS P3, which training leaves out, and GuitarSet takes outside `--every 3`); EGSet12 is never used for training or choosing a checkpoint.
+Training validates on takes the tests don't use (Guitar-TECHS P3, which training leaves out, and 8 GuitarSet takes outside `--every 3`), and the stages, the checkpoints and the blend share were chosen on those; EGSet12 is never used for training or choosing. Why the stages: on electric data alone, clean acoustic guitar slipped (validation 84.9 -> 82.9 after 200 steps) while distortion improved fast; the anchor of clean acoustic recordings (distillation only) at weight 0.6 brought it back to 83.8 and the 70/30 blend to 84.7.
 
 | Script | What it checks |
 |---|---|
