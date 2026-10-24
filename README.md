@@ -94,7 +94,7 @@ These band results were measured before the note detector was tuned for distorti
 | **Electric guitar** ([EGSet12](https://zenodo.org/records/11406378), 12 takes) | 86.9% → 86.3% | 77.6% → **79.2%** | 60.1% → **68.6%** | 64.7% → **72.9%** |
 | **Acoustic guitar** ([GuitarSet](https://guitarset.weebly.com/), 120 takes clean, 60 through the amps) | 90.0% → 89.8% | 82.0% → **84.6%** | 52.2% → **66.9%** | 69.8% → **77.2%** |
 
-It also makes up fewer notes: through heavy distortion, 74% of the notes it writes are real on the electric takes (was 68%) and 72% on the acoustic ones (was 61%).
+It also makes up fewer notes: through heavy distortion, 74% of the notes it writes are real on the electric takes (was 68%) and 72% on the acoustic ones (was 61%). With the whole tab worked out (strings, tuning and capo too), notes completely right (pitch, timing, string and fret; F1) on the electric takes: through the amp and cabinet 35.2 → **39.0**, through heavy distortion 29.2 → **36.9**, with tuning and capo right on 12 of 12 (11 before) in both, and clean 64.5 → **65.1**. On the acoustic takes through heavy distortion (20 takes, the whole app): tuning and capo right 15 → **19** of 20, notes completely right 31.4 → **50.5**.
 
 **A guitar on its own** (a lesson, a cover): the app notices that there is nothing to take away and uses the recording as it is (all 22 solo test takes recognised, no band mix mistaken for one), so isolation can't cost notes there: on EGSet12's 12 electric takes 86.8% of the notes found and 64.1 completely right, the same as the clean recording (the standard model used to take some of the guitar away: 81.3% and 58.2). It usually tells from five short pieces spread over the song, and then skips separating the rest.
 
@@ -111,7 +111,7 @@ It also makes up fewer notes: through heavy distortion, 74% of the notes it writ
 | Same, real electric guitar (EGSet12, never used for training) | true notes 73.4% → **83.3%**; transcribed notes 61.8% → **74.2%** |
 | Notes that come out completely right in the tab (pitch, timing, string and fret; F1) | GuitarSet 62.3 → **78.3**; with drums and bass 61.3 → **79.3**; EGSet12 53.6 → **64.5** |
 | Tuning + capo correct on standard-tuning takes, transcribed | GuitarSet 343 → **350** of 360; with drums and bass 38 → **40** of 40; EGSet12 12 of 12 |
-| Overdriven guitar (GuitarSet through a simulated amp, 20 takes): tuning + capo correct / notes completely right (F1) | mild 19 → **20** of 20 / 64.1 → **73.1**; heavy 8 → **16** of 20 / 22.7 → **44.4** (heavy distortion's made-up low notes used to pass for drop D) |
+| Overdriven guitar (GuitarSet through a simulated amp, 20 takes): tuning + capo correct / notes completely right (F1) | overdrive 20 of 20 / 72.9 → **74.0**; heavy 15 → **19** of 20 / 31.4 → **50.5** (before → after tuning the note detector for distortion; heavy distortion's made-up low notes used to pass for drop D) |
 | Brave Bird, *Too Late Now* (the real recording, DAEABE capo 7) | tuning and capo right for all three guitar parts, 96% sure (measured with the previous version) |
 | DAEABE capo 7 test song (Brave Bird style arpeggios, `tools/synth_song.py`) | tuning and capo right for the guitar alone (the previous version said standard tuning) and for the full band mix; string/fret 97% / 96% |
 | Tuning + capo correct on test riffs in DAEABE, FACGCE, open D, drop D, Eb, capo 2/3/7 | 9 of 10 (DADGAD capo 2 was mistaken for standard) |
