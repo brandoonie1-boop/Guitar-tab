@@ -3,7 +3,7 @@
 Turn any song into guitar tab. Drop in an audio or video file, paste a link, or record the song while it plays, and the app:
 
 1. pulls the guitar out of the mix with BS-RoFormer, one of the best music separation models there is (and splits two guitars that are panned left/right),
-2. hears the notes, including bends,
+2. hears the notes, including bends, also through overdrive and heavy distortion,
 3. finds the beat and the bar lines (including songs that change meter),
 4. works out the tuning, the capo position and how far the recording is from A440,
 5. listens to which string each note was played on (a note sounds different on a thicker string higher up the neck), weighs that against what's comfortable to play, and writes the tab.
@@ -85,6 +85,17 @@ It gets you most of the way, not a perfect 1:1 copy. Expect to check it by ear a
 | how many of the notes it writes are real guitar notes | 48.8% | **80.8%** | |
 | **Real songs** ([MUSDB25](https://huggingface.co/datasets/kwatcharasupat/musdb25) multitracks, 12 songs, 30 s where the guitar plays, mixed and produced as released; no tab to compare with): how cleanly the guitar comes out | 5.0 dB | **6.8 dB** (better on all 12) | |
 
+These band results were measured before the note detector was tuned for distortion; on clean guitar the tuned one finds about the same notes (below).
+
+**Distorted guitar.** The note detector is tuned to hear notes through overdrive and distortion (see [How it works](#how-it-works)). Notes found, before → after the tuning, through the app's own engine, on real recordings with the true tab, clean and sent through simulated amps (a soft clipper at two strengths, and an amp model with a speaker cabinet). None of these takes was used to train the tuned model or to choose it:
+
+| | clean | overdrive | heavy distortion | amp and cabinet |
+|---|---|---|---|---|
+| **Electric guitar** ([EGSet12](https://zenodo.org/records/11406378), 12 takes) | 86.9% → 86.3% | 77.6% → **79.2%** | 60.1% → **68.6%** | 64.7% → **72.9%** |
+| **Acoustic guitar** ([GuitarSet](https://guitarset.weebly.com/), 120 takes clean, 60 through the amps) | 90.0% → 89.8% | 82.0% → **84.6%** | 52.2% → **66.9%** | 69.8% → **77.2%** |
+
+It also makes up fewer notes: through heavy distortion, 74% of the notes it writes are real on the electric takes (was 68%) and 72% on the acoustic ones (was 61%).
+
 **A guitar on its own** (a lesson, a cover): the app notices that there is nothing to take away and uses the recording as it is (all 22 solo test takes recognised, no band mix mistaken for one), so isolation can't cost notes there: on EGSet12's 12 electric takes 86.8% of the notes found and 64.1 completely right, the same as the clean recording (the standard model used to take some of the guitar away: 81.3% and 58.2). It usually tells from five short pieces spread over the song, and then skips separating the rest.
 
 **Note detection, strings and tuning in detail**, measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the true tab); where drums and bass are mixed in, these earlier tests used simple synthetic drums and bass and the standard isolation model:
@@ -93,8 +104,8 @@ It gets you most of the way, not a perfect 1:1 copy. Expect to check it by ear a
 |---|---|
 | Notes found, guitar on its own (onset F1, 40 takes) | 90%: chord comping 89.5%, single-note lines 91.6% (basic-pitch, the previous note detector: 79%) |
 | Notes found with synthetic drums and bass mixed in, after isolation (16 takes) | 88.7% (basic-pitch: 78.4%) |
-| Notes found on overdriven guitar (GuitarSet run through a simulated amp, 24 takes) | mild 81%, heavy 65% (basic-pitch: 74%, 60%) |
-| Notes found, real electric guitar ([EGSet12](https://zenodo.org/records/11406378): a Telecaster through an amp, 12 takes) | 86.9% |
+| Notes found on overdriven guitar (GuitarSet run through a simulated amp, 60 takes) | overdrive 82.0% → **84.6%**, heavy 52.2% → **66.9%** (before → after tuning the note detector for distortion) |
+| Notes found, real electric guitar ([EGSet12](https://zenodo.org/records/11406378): a Telecaster through an amp, 12 takes) | 86.3% (86.9% before the tuning for distortion) |
 | String/fret matches what the player used, from the notes alone → now also from how each note sounds (all 360 takes; every player judged by a string model that never heard them) | true notes 75.4% → **91.3%**; transcribed notes 72.7% → **90.5%** |
 | Same, with synthetic drums and bass mixed in, after isolation (40 takes) | 72.0% → **88.9%** |
 | Same, real electric guitar (EGSet12, never used for training) | true notes 73.4% → **83.3%**; transcribed notes 61.8% → **74.2%** |
@@ -112,7 +123,7 @@ Things it cannot know for sure:
 - **The capo.** A capo can't be heard. Many tuning/capo combinations sound exactly the same (standard with capo 2 = D standard with capo 4), and the tab numbers come out identical for those, so you can play it either way. The app picks the most likely setup and shows the others.
 - **Which string, every time.** The same note can often be played in 2–4 places. The app listens for it (about 9 in 10 notes land where the player had them on the acoustic guitar recordings above, 3 in 4 on the electric ones) and otherwise goes by what's comfortable; tap a note to move it. Electric guitars are harder: their lighter strings and plain G string sound different from the acoustic recordings most of the training data comes from, so the app also learns each recording's strings from the song itself.
 - **Low guitar notes under a bass guitar** can get pulled into the bass during isolation and go missing.
-- **Heavy distortion on full chords** creates tones nobody played (differences between the chord's notes), and some come out as extra low notes, an octave below a power chord. The tuning and capo are judged only from notes both note detectors agree on, leaving out low notes that look like such ghosts (no fifth right above them, as a real drop-tuned low note has), but expect more cleanup on very distorted parts: about two in three notes are found there.
+- **Heavy distortion on full chords** creates tones nobody played (differences between the chord's notes), and some come out as extra low notes, an octave below a power chord. The tuning and capo are judged only from notes both note detectors agree on, leaving out low notes that look like such ghosts (no fifth right above them, as a real drop-tuned low note has), but expect more cleanup on very distorted parts: about two in three notes are found there (67–69% on the heavily distorted test recordings, up from 52–60% before the note detector was tuned for distortion).
 - Two guitars that sit in the middle of the mix can't be pulled apart; they come out as one part.
 - **Guitars the isolation model doesn't recognise as guitar** (some synthesized or heavily effected sounds) can be left out of the isolated guitar. *Full song, wider net* also keeps the "other instruments" part of the mix, which catches them (along with keyboards and the like).
 
