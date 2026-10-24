@@ -53,7 +53,7 @@ def score(net, items, thr=(0.4, 0.3, 0.1)):
     D = []
     for x, notes in items:
         est = decode(infer(net, x), *thr)
-        ref = [(n[0], n[1], int(n[2])) for n in notes]
+        ref = [(n[0], n[1], int(round(n[2]))) for n in notes]  # GuitarSet pitches are averaged (63.98)
         tp, d = match(est, ref)
         TP += tp
         NE += len(est)

@@ -210,7 +210,7 @@ def gt_targets(notes, teacher_onset=None, snap=False):
     fr = np.zeros((T, 88), np.float32)
     ft = np.arange(T) / FPS
     for t0, t1, p in notes:
-        k = int(p) - BEGIN
+        k = int(round(p)) - BEGIN
         if not 0 <= k < 88:
             continue
         if snap and teacher_onset is not None:
