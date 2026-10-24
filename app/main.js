@@ -598,7 +598,7 @@ function offerFasterModel(remainSec) {
   const fast = Math.max(1, Math.round(remainSec / 6 / 60));
   const box = $('workOffer');
   box.replaceChildren(
-    el('span', { text: `The best isolation needs about ${mins} more minutes on this device. The standard model would take about ${fast} min and finds somewhat fewer notes in a full band. ` }),
+    el('span', { text: `The best isolation needs about ${mins} more minutes on this device. The standard model would take about ${fast} min but finds fewer of the notes in a full band (on our tests 72-79% instead of 86%). ` }),
     el('button', { class: 'btn', type: 'button', text: 'Use the standard model', onclick: () => {
       box.hidden = true;
       setModelPref('full');

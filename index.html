@@ -337,7 +337,7 @@ button.fact:hover { border-color: var(--accent); }
           <option value="full">Standard (faster)</option>
           <option value="lite">Light (least memory)</option>
         </select>
-        <div class="help" id="modelHelp">Best (BS-RoFormer) pulls the guitar out of a full band much more cleanly, so more of the notes are found. It downloads 353 MB once from Hugging Face and is quick with a graphics chip; on a processor alone a long song can take 15 minutes or more, and the app offers the standard model if it will take long. The app also steps down by itself if a run runs out of memory.</div>
+        <div class="help" id="modelHelp">Best (BS-RoFormer) pulls the guitar out of a full band much more cleanly, so more of the notes are found (on our tests 86% instead of 72–79%). It downloads 353 MB once from Hugging Face and is quick with a graphics chip; on a processor alone a long song can take 15 minutes or more, and the app offers the standard model if it will take long. The app also steps down by itself if a run runs out of memory.</div>
       </div>
       <div class="setting">
         <label for="optNotes">Note detection</label>
@@ -454,6 +454,6 @@ button.fact:hover { border-color: var(--accent); }
   </div>
 </div>
 
-<script type="module" src="app/main.js?v=cea5fc5055"></script>
+<script type="module" src="app/main.js?v=f1b4f9a50b"></script>
 </body>
 </html>

@@ -124,6 +124,8 @@ if (process.argv.includes('--interact')) {
       const other = [];
       for (const c of chips) if ((await c.getAttribute('aria-pressed')) === 'false') other.push(c);
       if (other.length) { await other[0].click(); await page.waitForTimeout(1500); console.log('moved note; undo enabled:', !(await page.isDisabled('#undoBtn'))); }
+      // a note with nowhere else to go leaves the sheet open
+      if (await page.isVisible('.edit-sheet button:has-text("Close")')) { await page.click('.edit-sheet button:has-text("Close")'); await page.waitForTimeout(500); }
     }
   }
   // switch to an alternative setup

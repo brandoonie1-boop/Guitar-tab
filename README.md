@@ -34,7 +34,7 @@ The first song downloads the models once: about 65 MB of the app's own files (75
 - **Tuning and capo:** worked out from the whole song, all guitar parts together. The best match is shown with other possibilities and how likely each one is. Tap another one and the whole tab is re-fingered for it. Add the tunings you play to *Tunings you use* so they get picked more readily.
 - **Tempo and bars:** tap the tempo to fix half-time / double-time mix-ups or shift where bars start.
 - **Fix a note:** tap it in the tab to move it to another string, nudge the pitch, or delete it. *Undo* reverts.
-- **Play along, like Songsterr:** *Tab* plays the tab itself with real recorded guitar notes, every string and fret (steel-string acoustic, nylon, clean electric, crunch or distortion through a modelled amp and speaker; the app starts with the sound that matches the recording), including slides, bends, vibrato, hammer-ons, pull-offs, palm mutes and how hard each note was played. Or play the original recording or the isolated guitar in sync with the tab. Speed 25–125%, looping (the whole song, or select bars in the tab to loop just those), a metronome and count-in, and a fretboard under the tab that shows each note as it plays. The cursor follows along; tap the tab to jump there.
+- **Play along, like Songsterr:** *Tab* plays the tab itself with real recorded guitar notes, every string and fret (steel-string acoustic, nylon, clean electric, crunch or distortion through a modelled amp and speaker; with the Best isolation model the app starts with the sound that matches the recording: right about 3 times in 4 on our tests, 9 in 10 for distorted guitars), including strums (down on the beat, up in between), slides, bends, vibrato, hammer-ons, pull-offs, palm mutes and how hard each note was played. Or play the original recording or the isolated guitar in sync with the tab. Speed 25–125%, looping (the whole song, or select bars in the tab to loop just those), a metronome and count-in, and a fretboard under the tab that shows each note as it plays. The cursor follows along; tap the tab to jump there.
 - **Export:** text tab (.txt), Guitar Pro (.gp, opens in Guitar Pro / TuxGuitar / MuseScore / Songsterr), MIDI, and the isolated guitar as .wav.
 - **Saved tabs** stay on the device you made them on.
 
@@ -67,16 +67,36 @@ Separating a whole song is memory-hungry, and phones end a page that uses too mu
 
 It gets you most of the way, not a perfect 1:1 copy. Expect to check it by ear and fix some notes.
 
-Measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the true tab):
+**In a band.** Test songs made from real guitar recordings with the true tab, mixed with real drums, bass and vocals from other songs ([MUSDB18](https://sigsep.github.io/datasets/musdb.html)) with the guitar 3–9 dB below the band, run through the app's own engine. "The guitar on its own" is the same song with perfect isolation: the best the rest of the app can do.
+
+| | Standard isolation (Demucs) | **Best isolation (BS-RoFormer)** | the guitar on its own |
+|---|---|---|---|
+| **Acoustic guitar** ([GuitarSet](https://guitarset.weebly.com/), 30 takes): how cleanly the guitar comes out (SDR) | 10.0 dB | **14.4 dB** | |
+| notes found (onset F1) | 78.5% | **85.8%** | 89.6% |
+| string matches what the player used (notes found) | 84.8% | **91.6%** | 95.6% |
+| notes completely right in the tab (pitch, timing, string and fret; F1) | 64.5 | **78.6** | 85.6 |
+| tuning and capo right | 29 of 30 | **30 of 30** | 30 of 30 |
+| **Electric guitar through an amp** ([EGSet12](https://zenodo.org/records/11406378), 12 takes): how cleanly it comes out | 6.5 dB | **15.3 dB** | |
+| notes found | 71.5% | **86.2%** | 87.2% |
+| string right | 62.7% | **72.5%** | 73.7% |
+| notes completely right in the tab | 44.8 | **62.5** | 64.3 |
+| tuning and capo right | 12 of 12 | 12 of 12 | 12 of 12 |
+| **Arrangements with several guitar parts** ([Slakh2100](http://www.slakh.com/) test songs rendered from MIDI, 11 songs, 60 s each): notes found | 45.5% | **53.0%** | |
+| how many of the notes it writes are real guitar notes | 48.8% | **80.8%** | |
+| **Real songs** ([MUSDB25](https://huggingface.co/datasets/kwatcharasupat/musdb25) multitracks, 12 songs, 30 s where the guitar plays, mixed and produced as released; no tab to compare with): how cleanly the guitar comes out | 5.0 dB | **6.8 dB** (better on all 12) | |
+
+**A guitar on its own** (a lesson, a cover): the app notices that there is nothing to take away and uses the recording as it is (all 22 solo test takes recognised, no band mix mistaken for one), so isolation can't cost notes there: on EGSet12's 12 electric takes 86.8% of the notes found and 64.1 completely right, the same as the clean recording (the standard model used to take some of the guitar away: 81.3% and 58.2). It usually tells from five short pieces spread over the song, and then skips separating the rest.
+
+**Note detection, strings and tuning in detail**, measured on [GuitarSet](https://guitarset.weebly.com/) (real recordings with the true tab); where drums and bass are mixed in, these earlier tests used simple synthetic drums and bass and the standard isolation model:
 
 | | result |
 |---|---|
 | Notes found, guitar on its own (onset F1, 40 takes) | 90%: chord comping 89.5%, single-note lines 91.6% (basic-pitch, the previous note detector: 79%) |
-| Notes found with drums and bass mixed in, after isolation (16 takes) | 88.7% (basic-pitch: 78.4%) |
+| Notes found with synthetic drums and bass mixed in, after isolation (16 takes) | 88.7% (basic-pitch: 78.4%) |
 | Notes found on overdriven guitar (GuitarSet run through a simulated amp, 24 takes) | mild 81%, heavy 65% (basic-pitch: 74%, 60%) |
 | Notes found, real electric guitar ([EGSet12](https://zenodo.org/records/11406378): a Telecaster through an amp, 12 takes) | 86.9% |
 | String/fret matches what the player used, from the notes alone → now also from how each note sounds (all 360 takes; every player judged by a string model that never heard them) | true notes 75.4% → **91.3%**; transcribed notes 72.7% → **90.5%** |
-| Same, with drums and bass mixed in, after isolation (40 takes) | 72.0% → **88.9%** |
+| Same, with synthetic drums and bass mixed in, after isolation (40 takes) | 72.0% → **88.9%** |
 | Same, real electric guitar (EGSet12, never used for training) | true notes 73.4% → **83.3%**; transcribed notes 61.8% → **74.2%** |
 | Notes that come out completely right in the tab (pitch, timing, string and fret; F1) | GuitarSet 62.3 → **78.3**; with drums and bass 61.3 → **79.3**; EGSet12 53.6 → **64.5** |
 | Tuning + capo correct on standard-tuning takes, transcribed | GuitarSet 343 → **350** of 360; with drums and bass 38 → **40** of 40; EGSet12 12 of 12 |
@@ -94,6 +114,7 @@ Things it cannot know for sure:
 - **Low guitar notes under a bass guitar** can get pulled into the bass during isolation and go missing.
 - **Heavy distortion on full chords** creates tones nobody played (differences between the chord's notes), and some come out as extra low notes, an octave below a power chord. The tuning and capo are judged only from notes both note detectors agree on, leaving out low notes that look like such ghosts (no fifth right above them, as a real drop-tuned low note has), but expect more cleanup on very distorted parts: about two in three notes are found there.
 - Two guitars that sit in the middle of the mix can't be pulled apart; they come out as one part.
+- **Guitars the isolation model doesn't recognise as guitar** (some synthesized or heavily effected sounds) can be left out of the isolated guitar. *Full song, wider net* also keeps the "other instruments" part of the mix, which catches them (along with keyboards and the like).
 
 ## How it works
 
@@ -107,7 +128,7 @@ Things it cannot know for sure:
 | Which string, from the sound | for every note, its first 24 overtones in three snapshots after the attack (level, how sharp each runs, a fitted inharmonicity coefficient), skipping overtones that collide with other notes; a small network (`engine/strings.js`, trained by `tools/train_strings.py` on [GuitarSet](https://guitarset.weebly.com/) and [Guitar-TECHS](https://zenodo.org/records/14963133) with random tone changes) scores each place on the neck the note could be played. After a first fingering pass, each string's stiffness is fitted from the recording itself and the notes are fingered again (electric guitars with a plain G string) |
 | Strings, frets, tuning, capo | beam search over hand positions, ringing strings, stretches and open strings, plus what the sound says about each note's string; every candidate tuning × capo is scored by how naturally the music lays out on it and how well it fits the sound |
 | Rendering, Guitar Pro | [alphaTab](https://www.alphatab.net/) |
-| Tab playback | `app/guitarsynth.js`: a recording of every string and fret (from [Guitar-TECHS](https://zenodo.org/records/14963133)'s direct-input recordings for the electric and steel-string sounds, the steel-string one equalised string by string to [GuitarSet](https://guitarset.weebly.com/)'s microphone recordings; the [University of Iowa](https://theremin.music.uiowa.edu/MISguitar.html) samples for nylon), played the way a guitar works: one note per string at a time, strums spread across the strings, hammer-ons and pull-offs without a new pick attack, slides, bends and vibrato as pitch glides, palm mutes darker and shorter, each note as loud as it was heard. The electric sounds go through a modelled amp (drive, tone stack) and speaker cabinets measured from Guitar-TECHS's amp-microphone recordings, then a small room, a compressor and a limiter. It acts like a media element, so alphaTab's cursor follows it the same way it follows the recording |
+| Tab playback | `app/guitarsynth.js`: a recording of every string and fret (from [Guitar-TECHS](https://zenodo.org/records/14963133)'s direct-input recordings for the electric and steel-string sounds, the steel-string one equalised string by string to [GuitarSet](https://guitarset.weebly.com/)'s microphone recordings; the [University of Iowa](https://theremin.music.uiowa.edu/MISguitar.html) samples for nylon), played the way a guitar works: one note per string at a time, strums spread across the strings (down strokes on the beat, up strokes in between), hammer-ons and pull-offs without a new pick attack, slides, bends and vibrato as pitch glides, palm mutes darker and shorter, each note as loud as it was heard. The electric sounds go through a modelled amp (drive, tone stack) and speaker cabinets measured from Guitar-TECHS's amp-microphone recordings, then a small room, a compressor and a limiter. It acts like a media element, so alphaTab's cursor follows it the same way it follows the recording |
 | Runtime | [ONNX Runtime Web](https://onnxruntime.ai/) (WebAssembly, multi-threaded when the service worker enables cross-origin isolation) |
 
 Code layout:

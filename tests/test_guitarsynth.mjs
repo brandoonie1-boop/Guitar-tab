@@ -31,6 +31,21 @@ check('bend: a full step', JSON.stringify(b.bend) === '[[0,0],[1,200]]', JSON.st
 check('tie: the bent note rings through the tied beat', near(b.end, 4.5), String(b.end));
 check('loudness from the transcription', ev.every((e) => e.amp === 0.5));
 
+// strums: the first string of a chord on the beat, down on the beat, up in between
+{
+  const t2 = `\\title "s"
+\\tempo 120
+\\track "Guitar"
+\\staff {tabs}
+\\ts (4 4) (0.3 0.2 0.1).8 (0.3 0.2 0.1).8 (2.4 3.3).4 r.2 |`;
+  const sc = alphaTab.importer.ScoreLoader.loadAlphaTex(t2, new alphaTab.Settings());
+  const e2 = scoreEvents(sc, 0, [], null);
+  const by = (t) => e2.filter((e) => near(e.t, t)).map((e) => `${e.s}:${e.chordIndex}${e.up ? 'u' : 'd'}`).join(' ');
+  check('strum timed from the chord\'s own lowest string', by(0) === '3:0d 4:1d 5:2d', by(0));
+  check('off-beat chord: up stroke from the high string', by(0.25) === '3:2u 4:1u 5:0u', by(0.25));
+  check('next beat: down again', by(0.5) === '2:0d 3:1d', by(0.5));
+}
+
 // without sync points the score's tempo sets the time
 const ev2 = scoreEvents(score, 0, [], null);
 check('tempo when there are no sync points', near(ev2[1].t, 0.5) && near(ev2[7].t, 2), `${ev2[1].t} ${ev2[7].t}`);

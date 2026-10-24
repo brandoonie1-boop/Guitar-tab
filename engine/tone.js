@@ -66,11 +66,20 @@ export function toneFeatures(x, sr = 44100) {
 }
 
 /**
- * The tab player's sound for a recording. Fitted by tools/fit_tone.mjs on labelled recordings:
- * a score per kind of guitar (acoustic, clean electric, distorted electric) from the features,
- * and among distorted guitars, a line between crunch and high gain ('lead').
+ * The tab player's sound for a recording. Fitted by tools/fit_tone.mjs on guitars isolated by
+ * BS-RoFormer (which takes away much of the top end, so the rules hold for its output only): a
+ * score per kind of guitar (acoustic, clean electric, distorted electric) from the features, and
+ * among distorted guitars, a line between crunch and high gain ('lead'). Data: 12 tracks of each
+ * kind from MUSDB25 multitracks mixed with MUSDB18 drums, bass and vocals, plus GuitarSet
+ * (acoustic) and EGSet12 (clean electric) band mixes; cross-validated: acoustic 71%, clean 74%,
+ * distorted 91%.
  */
-export const TONE_RULES = null;
+export const TONE_RULES = {
+  acoustic: { b: 4.0628, hf: 0.0392, flat: -0.0745, crest: -0.4053, decay: 0.0727 },
+  clean: { b: -9.49, hf: -0.0513, flat: -0.0745, crest: 0.6026, decay: 0.0089 },
+  distorted: { b: 5.4272, hf: 0.0121, flat: 0.149, crest: -0.1973, decay: -0.0817 },
+  lead: { b: 22.9011, flat: 0.3685, crest: -1.9244 },
+};
 
 export function guessTone(x, sr = 44100, rules = TONE_RULES) {
   const f = toneFeatures(x, sr);

@@ -139,11 +139,17 @@ export function scoreEvents(score, trackIndex, syncPoints, ampOf) {
   const byNote = new Map();
   for (const bar of staff.bars) {
     const mb = mbs[bar.index];
+    // strumming: down on the beat, up in between (on the 16ths when the bar has 16th strums)
+    let has16 = false;
+    for (const voice of bar.voices) for (const beat of voice.beats) if (beat.notes && beat.notes.length > 1 && beat.playbackStart % 480 === 240) has16 = true;
     for (const voice of bar.voices) {
       for (const beat of voice.beats) {
         if (beat.isRest || !beat.notes || !beat.notes.length) continue;
         const t0 = mb.start + beat.playbackStart, t1 = t0 + beat.playbackDuration;
         const ts = toSec(t0), te = toSec(t1);
+        const up = has16 ? beat.playbackStart % 480 === 240 : beat.playbackStart % 960 === 480;
+        let lo = 6, hi = -1;
+        for (const n of beat.notes) { lo = Math.min(lo, n.string - 1); hi = Math.max(hi, n.string - 1); }
         for (const n of beat.notes) {
           if (n.isTieDestination && n.tieOrigin && byNote.has(n.tieOrigin)) {
             const o = byNote.get(n.tieOrigin);
@@ -164,7 +170,8 @@ export function scoreEvents(score, trackIndex, syncPoints, ampOf) {
             vibrato: n.vibrato || 0,
             ghost: !!n.isGhost, dead: !!n.isDead, palmMute: !!n.isPalmMute, letRing: !!n.isLetRing,
             harmonic: n.harmonicType || 0,
-            chordIndex: beat.notes.length > 1 ? n.string - 1 : -1, chordSize: beat.notes.length,
+            // strings the pick has crossed before this one (from the low side on a down stroke)
+            chordIndex: beat.notes.length > 1 ? (up ? hi - s : s - lo) : -1, chordSize: beat.notes.length, up: beat.notes.length > 1 && up,
           };
           byNote.set(n, e);
           events.push(e);
@@ -345,7 +352,7 @@ export class GuitarSynth extends EventTarget {
     this._next = this.events.findIndex((e) => e.end > from);
     if (this._next < 0) this._next = this.events.length;
     this._nextBeat = this.beats.findIndex((b) => b >= from - 1e-6);
-    // notes already sounding at the start point come in too (from where they are)
+    // notes still sounding at the start point are played too (picked again, as the start)
     this.timer = setInterval(() => this._pump(), 25);
     this._pump();
   }
@@ -447,8 +454,9 @@ export class GuitarSynth extends EventTarget {
     const c = this.ctx;
     const smp = this._sample(e.s, e.pitch);
     if (!smp) return;
-    // strum: a few ms between the strings of a chord (down strokes: low string first)
-    const strum = e.chordIndex >= 0 ? e.chordIndex * 0.007 : 0;
+    // strum: a few ms between the strings of a chord, the first one on the beat (down strokes
+    // from the low string, up strokes from the high one, a little quicker), never quite even
+    const strum = e.chordIndex >= 0 ? e.chordIndex * (e.up ? 0.006 : 0.007) + (e.chordIndex ? (Math.random() - 0.5) * 0.002 : 0) : 0;
     const when = Math.max(c.currentTime + 0.005, this._ctxTime(e.t) + strum);
     const endAt = this._ctxTime(e.end);
     const prev = this.voices[e.s];
@@ -462,12 +470,15 @@ export class GuitarSynth extends EventTarget {
     if (prev && !e.letRing) { this._release(prev, when, e.legato ? 0.006 : 0.012); this.voices[e.s] = null; }
     const src = c.createBufferSource();
     src.buffer = this.bank.buffer;
-    src.detune.value = smp.detune;
+    // no two notes quite alike: a few cents of finger pressure either way
+    const detune = smp.detune + (Math.random() - 0.5) * 6;
+    src.detune.value = detune;
     const g = c.createGain();
     // loudness: the note's own level when known, softer for ghost notes and hammer-ons
     let level = e.amp != null ? 0.35 + 0.65 * Math.min(1, Math.max(0, e.amp)) : 0.8;
     if (e.ghost) level *= 0.35;
     if (e.legato || e.slidDest) level *= 0.7;
+    if (e.up) level *= 0.85;
     level *= 1 + (Math.random() - 0.5) * 0.12;
     let out = g;
     if (e.palmMute || e.dead) {
@@ -493,10 +504,10 @@ export class GuitarSynth extends EventTarget {
     // slide in from a few frets away
     if (e.slideIn === 1 || e.slideIn === 2) {
       const from = e.slideIn === 1 ? -300 : 300;
-      src.detune.setValueAtTime(smp.detune + from, when);
-      src.detune.linearRampToValueAtTime(smp.detune, when + 0.08);
+      src.detune.setValueAtTime(detune + from, when);
+      src.detune.linearRampToValueAtTime(detune, when + 0.08);
     }
-    this._bendAndVibrato(v, e, when, endAt, smp.detune);
+    this._bendAndVibrato(v, e, when, endAt, detune);
     this._scheduleEnd(v, e, endAt);
   }
 

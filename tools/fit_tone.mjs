@@ -1,9 +1,11 @@
 // Fits engine/tone.js's TONE_RULES (which sound the tab player starts with) on labelled guitar
 // recordings: a small softmax model over the four tone features for acoustic / clean / distorted,
 // and, among distorted guitars, a line between crunch and high gain ("lead").
-//   node tools/fit_tone.mjs <label>:<wav file or folder> ... [--max n] [--windows n]
-// label: acoustic | clean | distorted. Prints the cross-validated accuracy and the rules to paste
-// into engine/tone.js.
+//   node tools/fit_tone.mjs <label>:<file, folder or folder/pattern*> ... [--max n] [--windows n]
+// label: acoustic | clean | distorted. Files: WAV, or .f32 (planar stereo float32 at 44.1 kHz, as
+// separated guitars are kept by the evaluation scripts). Fit on guitars after isolation, as the
+// app sees them: isolation takes away much of the top end. Prints the cross-validated accuracy and
+// the rules to paste into engine/tone.js.
 import fs from 'node:fs';
 import path from 'node:path';
 import { decodeWav } from '../engine/wav.js';
@@ -16,16 +18,27 @@ const MAX = opt('--max', 1e9), WINDOWS = opt('--windows', 2);
 const CLASSES = ['acoustic', 'clean', 'distorted'];
 const KEYS = ['hf', 'flat', 'crest', 'decay'];
 
+// planar stereo float32, 44.1 kHz
+function planar(b) {
+  const a = new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
+  const n = a.length / 2;
+  return { sr: 44100, channels: [a.subarray(0, n), a.subarray(n)] };
+}
+
 const sources = args.filter((a, i) => /^[a-z]+:/.test(a) && !/^--/.test(args[i - 1] || ''));
 const rows = []; // { x: [..], y: class index, file }
 for (const src of sources) {
   const label = src.slice(0, src.indexOf(':')), p = src.slice(src.indexOf(':') + 1);
   const y = CLASSES.indexOf(label);
   if (y < 0) throw new Error(`unknown label ${label}`);
-  let files = fs.statSync(p).isDirectory() ? fs.readdirSync(p).filter((f) => /\.wav$/i.test(f)).sort().map((f) => path.join(p, f)) : [p];
+  let files;
+  if (p.includes('*')) {
+    const d = path.dirname(p), re = new RegExp('^' + path.basename(p).split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
+    files = fs.readdirSync(d).filter((f) => re.test(f) && /\.(wav|f32)$/i.test(f)).sort().map((f) => path.join(d, f));
+  } else files = fs.statSync(p).isDirectory() ? fs.readdirSync(p).filter((f) => /\.(wav|f32)$/i.test(f)).sort().map((f) => path.join(p, f)) : [p];
   if (files.length > MAX) files = Array.from({ length: MAX }, (_, i) => files[Math.floor((i * files.length) / MAX)]);
   for (const f of files) {
-    const w = decodeWav(fs.readFileSync(f));
+    const w = f.endsWith('.f32') ? planar(fs.readFileSync(f)) : decodeWav(fs.readFileSync(f));
     let x = w.channels[0];
     if (w.channels.length > 1) { x = new Float32Array(x.length); for (const c of w.channels) for (let i = 0; i < x.length; i++) x[i] += c[i] / w.channels.length; }
     if (w.sr !== 44100) x = resample(x, w.sr, 44100);
