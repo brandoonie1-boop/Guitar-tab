@@ -1,6 +1,7 @@
 // JS front end + ONNX parts + note decoding of the guitar transcription model vs. the
 // PyTorch original (reference data from tools/make_hrgt_ref.py).
 // usage: node tests/test_hrgt.mjs <ref dir> <models dir with hrgt.chain + hrgt.weights.bin> [hop]
+// env: ORT = path of onnxruntime-node's dist/index.js
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseChain, loadParts } from '../engine/demucs.js';
@@ -8,7 +9,7 @@ import { HR, hrMelBands, hrLogMel, hrModel, hrActivations, hrNotes } from '../en
 
 const [ref, models, hopArg] = process.argv.slice(2);
 const f32 = (p) => new Float32Array(fs.readFileSync(path.join(ref, p)).buffer.slice(0));
-const ortMod = await import('/home/claude/work/jsenv/node_modules/onnxruntime-node/dist/index.js');
+const ortMod = await import(process.env.ORT || '/home/claude/work/jsenv/node_modules/onnxruntime-node/dist/index.js');
 const ort = ortMod.default || ortMod;
 
 // mel filters
