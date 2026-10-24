@@ -1,7 +1,8 @@
 // Full-pipeline evaluation on real guitar recordings (GuitarSet), optionally mixed with drums and bass.
 // usage: node tests/eval_gs_pipeline.mjs <n files> [--mix] [--off] [--every k] [--offset o]
 // env: HR=<dir with hrgt.chain + hrgt.weights.bin> use the guitar transcription model;
-//      STEMS=<dir> cache the separated guitar between runs; OPTS='{...}' extra options
+//      STEMS=<dir> cache the separated guitar between runs; OPTS='{...}' extra options;
+//      GS_ANN, GS_AUDIO, ORT, MODELS: where the annotations, audio, onnxruntime-node and models are
 import fs from 'node:fs';
 import path from 'node:path';
 import { decodeWav } from '../engine/wav.js';
@@ -15,11 +16,11 @@ const mix = args.includes('--mix');
 const off = args.includes('--off');
 const every = args.includes('--every') ? Number(args[args.indexOf('--every') + 1]) : 9;
 const offsetArg = args.includes('--offset') ? Number(args[args.indexOf('--offset') + 1]) : 0;
-const ANN = JSON.parse(fs.readFileSync('/home/claude/work/data/gs/guitarset_annotations.json', 'utf8'));
-const AUD = '/home/claude/work/data/guitarset/audio';
-const ortMod = await import('/home/claude/work/jsenv/node_modules/onnxruntime-node/dist/index.js');
+const ANN = JSON.parse(fs.readFileSync(process.env.GS_ANN || '/home/claude/work/data/gs/guitarset_annotations.json', 'utf8'));
+const AUD = process.env.GS_AUDIO || '/home/claude/work/data/guitarset/audio';
+const ortMod = await import(process.env.ORT || '/home/claude/work/jsenv/node_modules/onnxruntime-node/dist/index.js');
 const ort = ortMod.default || ortMod;
-const MODELS = '/home/claude/guitar-tab/models';
+const MODELS = process.env.MODELS || '/home/claude/guitar-tab/models';
 let demucs = null, bp = null, bm = null, hr = null;
 const STD = [40, 45, 50, 55, 59, 64];
 const extraOpts = process.env.OPTS ? JSON.parse(process.env.OPTS) : {};

@@ -7,7 +7,8 @@
 //   (fold_<player>.json from: python tools/train_strings.py cvfit <folds dir> ...):
 //     node tests/eval_strings.mjs guitarset <annotations.json> <audio dir> <activations dir> [folds dir] [--every k] [--detect]
 //   EGSet12 (electric guitar, not used for training):
-//     node tests/eval_strings.mjs egset <annotations.json> <audio dir> <activations dir> [model.json] [--detect]
+//     node tests/eval_strings.mjs egset <annotations.json> <audio dir> <activations dir> [model.json | default] [--detect]
+//     (default = the model the app ships, engine/strings-model.js)
 //
 // Without a folds dir / model the notes are fingered from the notes alone (the old way).
 // --detect also works out tuning and capo (otherwise standard tuning, no capo, is given).
@@ -20,7 +21,7 @@ import { resample } from '../engine/dsp.js';
 import { hrNotes } from '../engine/hrgt.js';
 import { cleanNotes } from '../engine/notes.js';
 import { rankSetups, assignFingering, buildEvents } from '../engine/fretboard.js';
-import { stringModel, attachStringEvidence, placeLogProbs } from '../engine/strings.js';
+import { stringModel, attachStringEvidence, placeLogProbs, defaultStringModel } from '../engine/strings.js';
 import { applySetup, notesForTuning, DEFAULT_OPTS } from '../engine/pipeline.js';
 
 const STD = [40, 45, 50, 55, 59, 64];
@@ -35,6 +36,7 @@ const names = Object.keys(ann).sort().filter((n, i) => i % every === 0 && (args.
 const models = {};
 function modelFor(name) {
   if (!modelArg) return null;
+  if (modelArg === 'default') return defaultStringModel(); // the one the app ships
   const file = kind === 'guitarset' ? path.join(modelArg, `fold_${name.slice(0, 2)}.json`) : modelArg;
   return (models[file] ||= stringModel(JSON.parse(fs.readFileSync(file, 'utf8'))));
 }
