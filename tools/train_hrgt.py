@@ -247,16 +247,20 @@ BRANCHES = ['frame_model', 'reg_onset_model', 'reg_offset_model', 'velocity_mode
 
 
 def setup_student(net):
+    """Trainable: convolution blocks 2-4, fc5/bn5 and the recurrent layers of the frame, onset and
+    offset branches; the velocity branch's recurrent layers; the two conditioning GRUs. Everything
+    else stays as trained, including the STFT and mel filterbank (torchlibrosa keeps them as
+    parameters)."""
     for p in net.parameters():
-        p.requires_grad = True
-    for p in net.bn0.parameters():
         p.requires_grad = False
-    for b in BRANCHES:
-        for p in getattr(net, b).conv_block1.parameters():
-            p.requires_grad = False
-    for name in ['conv_block2', 'conv_block3', 'conv_block4', 'fc5', 'bn5']:
-        for p in getattr(net.velocity_model, name).parameters():
-            p.requires_grad = False
+    train = []
+    for b in BRANCHES[:3]:
+        m = getattr(net, b)
+        train += [m.conv_block2, m.conv_block3, m.conv_block4, m.fc5, m.bn5, m.gru, m.fc]
+    train += [net.velocity_model.gru, net.velocity_model.fc, net.reg_onset_gru, net.reg_onset_fc, net.frame_gru, net.frame_fc]
+    for m in train:
+        for p in m.parameters():
+            p.requires_grad = True
     return [p for p in net.parameters() if p.requires_grad]
 
 
