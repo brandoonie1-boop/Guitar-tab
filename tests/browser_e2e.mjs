@@ -1,6 +1,9 @@
 // End-to-end browser test with Playwright: load the app, transcribe a file, check the tab, edit a note.
-// usage: node tests/browser_e2e.mjs <url> <audio file> [chromium|webkit] [--mobile] [--shots dir]
-import { chromium, webkit } from '/home/claude/work/jsenv/node_modules/playwright-core/index.mjs';
+// usage: node tests/browser_e2e.mjs <url> <audio file> [chromium|webkit] [--mobile] [--shots dir] [--model best|full|lite]
+// env: PLAYWRIGHT_CORE = path of playwright-core's index.mjs if it isn't installed here;
+//      HTTPS_PROXY is passed to the browser (Best's model downloads from Hugging Face)
+const pw = await import(process.env.PLAYWRIGHT_CORE || 'playwright-core');
+const { chromium, webkit } = pw.chromium ? pw : pw.default;
 
 const [url, file, browserName = 'chromium'] = process.argv.slice(2);
 const iphone = process.argv.includes('--iphone'); // phone-sized page with an iPhone user agent
@@ -8,7 +11,8 @@ const mobile = process.argv.includes('--mobile') || iphone;
 const si = process.argv.indexOf('--shots');
 const shots = si >= 0 ? process.argv[si + 1] : '/tmp/claude-0/shots';
 const bt = browserName === 'webkit' ? webkit : chromium;
-const browser = await bt.launch({ args: browserName === 'chromium' ? ['--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required'] : [] });
+const proxy = process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY, bypass: 'localhost,127.0.0.1' } : undefined;
+const browser = await bt.launch({ proxy, args: browserName === 'chromium' ? ['--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required'] : [] });
 const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1';
 const ctx = await browser.newContext(mobile ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: browserName !== 'webkit' ? true : undefined, hasTouch: true, ...(iphone ? { userAgent: IPHONE_UA } : {}) } : { viewport: { width: 1280, height: 900 } });
 const page = await ctx.newPage();
@@ -42,6 +46,9 @@ await page.setInputFiles('#fileInput', file);
 await page.waitForFunction(() => !document.getElementById('startBtn').disabled, null, { timeout: 60000 });
 console.log(el('decoded: ' + await page.textContent('#pickedInfo')));
 if (process.argv.includes('--just-guitar')) await page.click('[data-opt="isolate"][data-val="off"]'); // skip isolation
+const modelArg = process.argv.indexOf('--model');
+if (modelArg >= 0) await page.selectOption('#optModel', process.argv[modelArg + 1]);
+console.log('isolation model:', await page.inputValue('#optModel'));
 const isoArg = process.argv.indexOf('--isolate');
 if (isoArg >= 0) await page.click(`[data-opt="isolate"][data-val="${process.argv[isoArg + 1]}"]`);
 await page.click('#startBtn');
@@ -57,6 +64,8 @@ while (Date.now() < deadline) {
   if (st !== last) { console.log(el(st) + (memPeak ? ` [page process ${Math.round(memNow)} MB, peak ${Math.round(memPeak)} MB]` : '')); last = st; }
   await page.waitForTimeout(1000);
 }
+const toastText = await page.evaluate(() => { const t = document.querySelector('.toast'); return t ? t.textContent : ''; });
+if (toastText) console.log(el('toast: ' + toastText));
 await page.waitForTimeout(3000);
 if (memPeak) console.log(el(`peak page process memory ${Math.round(memPeak)} MB, now ${Math.round(memNow)} MB`));
 console.log(el('result: ' + (await page.textContent('#facts'))));
@@ -137,8 +146,18 @@ if (process.argv.includes('--interact')) {
   console.log('time label while playing:', await page.textContent('#timeLbl'));
   await page.click('#playBtn');
   await page.selectOption('#srcSel', 'synth'); await page.waitForTimeout(3000);
+  console.log('tab sound controls visible:', await page.isVisible('#toneSel'), await page.isVisible('#clickBtn'), await page.isVisible('#countBtn'), 'tone', await page.inputValue('#toneSel'));
   await page.click('#playBtn'); await page.waitForTimeout(2500);
   console.log('time label synth:', await page.textContent('#timeLbl'));
+  // the guitar player's sounds, the fretboard, metronome and count-in
+  await page.selectOption('#toneSel', 'lead'); await page.waitForTimeout(1500);
+  await page.click('#fretBtn'); await page.click('#clickBtn'); await page.waitForTimeout(2000);
+  const lit = await page.evaluate(() => document.querySelectorAll('#fretboard .dot.on').length);
+  console.log('time label after distortion tone:', await page.textContent('#timeLbl'), '| fretboard notes lit:', lit);
+  await page.screenshot({ path: `${shots}/${browserName}${mobile ? '-m' : ''}-6-player.png` });
+  await page.click('#playBtn');
+  await page.click('#countBtn'); await page.click('#playBtn'); await page.waitForTimeout(3000);
+  console.log('time label after count-in start:', await page.textContent('#timeLbl'));
   await page.click('#playBtn');
   // library
   await page.click('#navLibrary'); await page.waitForTimeout(1000);

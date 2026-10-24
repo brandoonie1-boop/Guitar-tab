@@ -7,3 +7,4 @@ dist-artifact/
 .DS_Store
 testdata/
 __pycache__/
+sounds/

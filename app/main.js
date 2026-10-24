@@ -11,7 +11,7 @@ import {
 import { resample } from '../engine/dsp.js';
 import * as store from './store.js';
 import { helperPing, helperDownload, HELPER_INSTALL_CMD, HELPER_SETUP_FILE, IS_WINDOWS } from './helper.js';
-import { prefetchAssets } from './assets.js';
+import { prefetchAssets, pruneAssetCache } from './assets.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, ...kids) => {
@@ -67,9 +67,12 @@ const IS_PHONE = /iPhone|iPod|Android.+Mobile/.test(navigator.userAgent);
 const DEBUG = /[?&]debug\b/.test(location.search);
 // tests only: ?forcegpu uses a software graphics adapter too (it is normally skipped as too slow)
 const FORCE_GPU = /[?&]forcegpu\b/.test(location.search);
-// Phones and small-memory computers default to the light isolation model: on GuitarSet with a
-// band mixed in it found the same notes (F1 77.7 vs 77.9) with about 40% less engine memory.
-const DEFAULT_MODEL = IS_PHONE || (navigator.deviceMemory && navigator.deviceMemory <= 4) ? 'lite' : 'full';
+// Guitar isolation: 'best' (BS-RoFormer, downloaded from Hugging Face once), 'full' (Demucs) or
+// 'lite' (Demucs, half-length segments: about 40% less engine memory). Best everywhere by default;
+// a run that runs out of memory steps down to the next one, and on a device where Best would take
+// long the work screen offers to switch.
+const DEFAULT_MODEL = 'best';
+const MODEL_STEPS = { best: 'full', full: 'lite' };
 const APP_URL = 'https://guitar-tab.onrender.com/';
 function gpuPref() {
   try { return localStorage.getItem('gt-gpu') || 'on'; } catch { return 'on'; }
@@ -191,7 +194,8 @@ function prefetchModels() {
   const opts = readOpts();
   const gpu = !$('gpuRow').hidden && $('optGpu').value === 'on';
   const keys = [gpu ? 'ortWasmGpu' : 'ortWasm'];
-  if (opts.isolate !== 'off') keys.push('demucsWeights', opts.model === 'lite' ? 'demucsLite' : 'demucsFull');
+  // (Best's model comes from Hugging Face during the run: 353 MB is not fetched unasked)
+  if (opts.isolate !== 'off' && opts.model !== 'best') keys.push('demucsWeights', opts.model === 'lite' ? 'demucsLite' : 'demucsFull');
   keys.push('beatModel', 'basicpitch');
   if (opts.notes !== 'basic') keys.push('hrgtWeights', 'hrgtChain');
   prefetchAssets(keys, { shouldStop: () => running }).catch(() => {}).finally(() => { prefetching = false; });
@@ -566,7 +570,7 @@ function onProgress(p) {
   lastFrac = Math.max(lastFrac, frac);
   $('workBar').style.width = `${(100 * Math.max(0.01, lastFrac)).toFixed(1)}%`;
   let txt = p.label || '';
-  if (p.stage === 'load' && p.frac > 0) txt += ` · ${Math.round(p.frac * 100)}%`;
+  if (p.stage === 'load' && p.frac > 0 && !/%$/.test(txt)) txt += ` · ${Math.round(p.frac * 100)}%`;
   // the two long stages say how long they still need
   if (p.stage === 'separate' || p.stage === 'notes') {
     if (!stageClock[p.stage]) stageClock[p.stage] = performance.now();
@@ -577,9 +581,32 @@ function onProgress(p) {
       const remain = (el2 / f) * (1 - f) * 1.15;
       txt += ` · about ${remain > 90 ? Math.round(remain / 60) + ' min' : Math.max(5, Math.round(remain / 5) * 5) + ' s'} left`;
     }
+    if (p.stage === 'separate' && f > 0.03 && f < 0.6) offerFasterModel((el2 / f) * (1 - f));
   }
   if (DEBUG && p.wasmMB) txt += ` · engine memory ${p.wasmMB} MB`;
   $('workStatus').textContent = txt;
+}
+
+// Best isolation is heavy: where it would take long (no graphics chip, a slow processor) the
+// work screen offers the standard model, once per run. Ignoring the offer keeps Best going.
+function offerFasterModel(remainSec) {
+  const mode = state.mode;
+  if (!mode || mode.model !== 'best' || state.offeredSwitch || remainSec < 600) return;
+  state.offeredSwitch = true;
+  const mins = Math.round(remainSec / 60);
+  // Demucs needs about a sixth of the time of BS-RoFormer on a processor
+  const fast = Math.max(1, Math.round(remainSec / 6 / 60));
+  const box = $('workOffer');
+  box.replaceChildren(
+    el('span', { text: `The best isolation needs about ${mins} more minutes on this device. The standard model would take about ${fast} min and finds somewhat fewer notes in a full band. ` }),
+    el('button', { class: 'btn', type: 'button', text: 'Use the standard model', onclick: () => {
+      box.hidden = true;
+      setModelPref('full');
+      state.switchTo = { ...mode, model: 'full' };
+      if (state.job) state.job.cancel();
+    } }),
+  );
+  box.hidden = false;
 }
 
 async function keepAwake(on) {
@@ -608,8 +635,9 @@ $('cancelBtn').addEventListener('click', () => {
 const RUN_KEY = 'gt-run';
 function setRunMarker(v) { try { if (v) localStorage.setItem(RUN_KEY, JSON.stringify(v)); else localStorage.removeItem(RUN_KEY); } catch { /* ignore */ } }
 function getRunMarker() { try { return JSON.parse(localStorage.getItem(RUN_KEY) || 'null'); } catch { return null; } }
-function modelPref() { try { return localStorage.getItem('gt-model') || DEFAULT_MODEL; } catch { return DEFAULT_MODEL; } }
-function setModelPref(v) { try { localStorage.setItem('gt-model', v); } catch { /* ignore */ } $('optModel').value = v; }
+// (a new key: the old one only knew 'full' and 'lite')
+function modelPref() { try { return localStorage.getItem('gt-sep') || DEFAULT_MODEL; } catch { return DEFAULT_MODEL; } }
+function setModelPref(v) { try { localStorage.setItem('gt-sep', v); } catch { /* ignore */ } $('optModel').value = v; }
 function notesPref() { try { return localStorage.getItem('gt-notes') || 'hr'; } catch { return 'hr'; } }
 function setNotesPref(v) { try { localStorage.setItem('gt-notes', v); } catch { /* ignore */ } $('optNotes').value = v; }
 function setGpuPref(v) { try { localStorage.setItem('gt-gpu', v); } catch { /* ignore */ } $('optGpu').value = v; }
@@ -667,13 +695,14 @@ async function start(mode = null) {
   if (!mode) {
     mode = {
       gpu: !$('gpuRow').hidden && $('optGpu').value === 'on',
-      lite: opts.model === 'lite',
+      model: opts.model,
       notes: opts.notes,
       // each engine thread costs memory too; phones gain little from more than 4
       threads: IS_PHONE ? 4 : 8,
     };
   }
   show('screenWork');
+  $('workOffer').hidden = true;
   $('workTitle').textContent = `Working on ${state.file.name}`;
   $('workBar').style.width = '1%';
   $('workStatus').textContent = 'Reading the file';
@@ -704,8 +733,11 @@ async function start(mode = null) {
   }
   const sr = a.sr, name = state.file.name;
   a = null;
+  state.mode = mode;
+  state.switchTo = null;
+  state.offeredSwitch = false;
   const runOpts = {
-    threads: mode.threads, gpu: mode.gpu, lite: mode.lite, notesModel: mode.notes || 'hr',
+    threads: mode.threads, gpu: mode.gpu, sepModel: mode.model, lite: mode.model === 'lite', notesModel: mode.notes || 'hr',
     isolate: opts.isolate, split: opts.split, tuning: opts.tuning, capo: opts.capo, range: null,
     // "balanced" separates with less overlap and steps the note model further: on GuitarSet
     // with a band, notes F1 88.5 vs 88.7 for "best", about a third less work
@@ -715,7 +747,7 @@ async function start(mode = null) {
     debugMem: DEBUG,
     forceGpu: FORCE_GPU,
   };
-  const marker = { t: Date.now(), gpu: mode.gpu, lite: mode.lite, notes: mode.notes || 'hr', name, phase: 'separate', hidden: document.visibilityState === 'hidden' };
+  const marker = { t: Date.now(), gpu: mode.gpu, model: mode.model, notes: mode.notes || 'hr', name, phase: 'separate', hidden: document.visibilityState === 'hidden' };
   // 1. isolate the guitar (its own worker, ended afterwards so the model's memory is freed)
   let st;
   if (opts.isolate === 'off') {
@@ -749,7 +781,8 @@ async function start(mode = null) {
   clearNotice();
   res.ms = performance.now() - workStart;
   res.backend = state.backend ? state.backend.backend : 'none';
-  res.lite = opts.isolate !== 'off' && mode.lite;
+  res.lite = opts.isolate !== 'off' && mode.model === 'lite';
+  res.sepModel = opts.isolate !== 'off' ? mode.model : 'off';
   try {
     await finish(res, mixBlob, opts);
   } catch (err) {
@@ -762,6 +795,13 @@ async function start(mode = null) {
 // Decide how to retry a failed run, from lightest change to heaviest.
 function runFailed(mode, m, phase) {
   console.warn('run failed in', phase, ':', m.message, m.reason || '');
+  if (m.message === 'cancelled' && state.switchTo) {
+    // the user chose the faster isolation model while Best was running
+    const next = state.switchTo;
+    state.switchTo = null;
+    start(next);
+    return;
+  }
   if (m.message === 'cancelled') {
     keepAwake(false);
     show('screenStart');
@@ -777,10 +817,18 @@ function runFailed(mode, m, phase) {
       start({ ...mode, gpu: false });
       return;
     }
-    if (!mode.lite && memory) {
-      setModelPref('lite');
-      toast('Ran out of memory. Trying again with the lighter isolation model.');
-      start({ ...mode, lite: true });
+    if (MODEL_STEPS[mode.model] && memory) {
+      const next = MODEL_STEPS[mode.model];
+      setModelPref(next);
+      toast(`Ran out of memory. Trying again with the ${next === 'full' ? 'standard' : 'lighter'} isolation model.`);
+      start({ ...mode, model: next });
+      return;
+    }
+    if (mode.model === 'best' && /from Hugging Face|not the expected file/.test(m.message || '')) {
+      // the Best model could not be downloaded (offline, or Hugging Face unreachable): carry on
+      // with the standard model, which comes with the app; Best stays selected for next time
+      toast('Could not get the Best isolation model from Hugging Face. Using the standard model this time.');
+      start({ ...mode, model: 'full' });
       return;
     }
     if (m.crash && mode.threads > 1) {
@@ -818,9 +866,10 @@ function checkLastRun() {
   } else if (r.gpu) {
     setGpuPref('off');
     msg = `The last run (${r.name}) stopped before it finished. It will use the processor instead of the graphics chip this time.`;
-  } else if (!r.lite) {
-    setModelPref('lite');
-    msg = `The last run (${r.name}) stopped before it finished, most likely because the browser ran out of memory. The lighter isolation model is now selected below.`;
+  } else if (MODEL_STEPS[r.model || (r.lite ? 'lite' : 'full')]) {
+    const next = MODEL_STEPS[r.model || (r.lite ? 'lite' : 'full')];
+    setModelPref(next);
+    msg = `The last run (${r.name}) stopped before it finished, most likely because the browser ran out of memory. The ${next === 'full' ? 'standard' : 'lighter'} isolation model is now selected below.`;
   } else {
     msg = `The last run (${r.name}) stopped before it finished, most likely because the browser ran out of memory. Pick a shorter part of the song below, or close other apps and tabs, then try again.`;
   }
@@ -887,7 +936,7 @@ function restoreTech(result) {
 }
 
 async function finish(m, mixBlob, opts) {
-  console.info(`processed with ${m.backend}${m.lite ? ' (light model)' : ''} in ${(m.ms / 1000).toFixed(1)} s`);
+  console.info(`processed with ${m.backend} (isolation: ${m.sepModel || 'off'}) in ${(m.ms / 1000).toFixed(1)} s`);
   const result = m.result;
   restoreTech(result);
   const id = `p${Date.now().toString(36)}`;
@@ -899,7 +948,7 @@ async function finish(m, mixBlob, opts) {
     offset: result.offset || 0,
     summary: summaryOf(result),
     result,
-    stats: { ms: m.ms, backend: m.backend, lite: !!m.lite },
+    stats: { ms: m.ms, backend: m.backend, lite: !!m.lite, sepModel: m.sepModel },
   };
   state.project = project;
   state.undo = [];
@@ -962,10 +1011,13 @@ async function getTabView() {
     tabviewPromise = import('./tabview.js').then(async ({ TabView }) => {
       const tv = new TabView($('tab'), {
         onNoteClick: (id) => openSheet(id),
+        // how loud each transcribed note was, for the tab player (relative to the part's usual level)
+        ampOf: (id) => noteLoudness(id),
         onPlayState: (playing) => setPlayIcon(playing),
         onTime: (t, d) => {
           $('timeLbl').textContent = `${fmtTime(t)} / ${fmtTime(d)}`;
           if (!seeking && d > 0) $('seek').value = String(Math.round((1000 * t) / d));
+          if (state.fretboard && !$('fretboard').hidden) state.fretboard.update(t);
         },
       });
       await tv.init();
@@ -988,6 +1040,7 @@ async function openProject(project, fresh = false) {
   renderParts();
   await renderTab(true);
   if (fresh && r.parts.length > 1) toast(`Found ${r.parts.length} guitars. Switch between them above the tab.`);
+  else if (fresh && r.alone) toast('Just a guitar here, so the recording was used as it is.');
 }
 
 function part() { return state.project.result.parts[state.part]; }
@@ -1091,9 +1144,13 @@ async function renderTab(resetSource = false) {
     $('srcSel').value = 'mix';
     tv.setSource('mix', state.urls.mix, 0);
     $('speedSel').value = '1';
+    $('toneSel').value = tonePref();
+    tv.synth.tone = $('toneSel').value;
+    for (const b of ['toneSel', 'clickBtn', 'countBtn']) $(b).hidden = true;
   }
   tv.show(r.alphaTex, r.texMaps, state.part, r.syncPoints);
   if ($('srcSel').value === 'guitar') applySource();
+  refreshFretboard();
 }
 
 function asciiForPart(i) {
@@ -1391,6 +1448,11 @@ $('srcSel').addEventListener('change', applySource);
 async function applySource() {
   const tv = await getTabView();
   const v = $('srcSel').value;
+  const synth = v === 'synth';
+  $('toneSel').hidden = !synth;
+  $('clickBtn').hidden = !synth;
+  $('countBtn').hidden = !synth;
+  if (synth) tv.synth.tone = $('toneSel').value;
   const r = state.project.result;
   const off = r.offset || 0;
   if (v === 'mix') tv.setSource('mix', state.urls.mix, 0);
@@ -1402,6 +1464,70 @@ async function applySource() {
   tv.setSpeed(Number($('speedSel').value));
 }
 function stopPlayback() { if (state.tabview) state.tabview.pause(); }
+
+// the live fretboard follows the notes of the part on screen
+async function refreshFretboard() {
+  if ($('fretboard').hidden || !state.tabview) return;
+  if (!state.fretboard) {
+    const { LiveFretboard } = await import('./fretboard.js');
+    state.fretboard = new LiveFretboard($('fretboard'));
+  }
+  const p = part();
+  state.fretboard.setPart(state.tabview.synth.events, p.setup.capo || 0);
+  state.fretboard.update(state.tabview.media.currentTime + (state.tabview.srcOffset || 0));
+}
+$('fretBtn').addEventListener('click', () => {
+  const on = $('fretBtn').getAttribute('aria-pressed') !== 'true';
+  $('fretBtn').setAttribute('aria-pressed', String(on));
+  $('fretboard').hidden = !on;
+  document.body.classList.toggle('fret-on', on);
+  try { localStorage.setItem('gt-fretboard', on ? '1' : ''); } catch { /* ignore */ }
+  refreshFretboard();
+});
+try { if (localStorage.getItem('gt-fretboard')) { $('fretBtn').setAttribute('aria-pressed', 'true'); $('fretboard').hidden = false; document.body.classList.add('fret-on'); } } catch { /* ignore */ }
+
+// the tab player's sound for this song: chosen by the user, else what the recording sounds like
+function tonePref() {
+  const r = state.project && state.project.result;
+  return (r && (r.tone || r.toneGuess)) || 'clean';
+}
+$('toneSel').addEventListener('change', async () => {
+  const tv = await getTabView();
+  const r = state.project.result;
+  r.tone = $('toneSel').value;
+  const playing = tv.isPlaying();
+  if (playing) tv.pause();
+  await tv.setTone(r.tone);
+  if (playing) tv.play();
+  saveCurrent().catch(() => {});
+});
+for (const [btn, fn] of [['clickBtn', 'setMetronome'], ['countBtn', 'setCountIn']]) {
+  $(btn).addEventListener('click', async () => {
+    const tv = await getTabView();
+    const on = $(btn).getAttribute('aria-pressed') !== 'true';
+    $(btn).setAttribute('aria-pressed', String(on));
+    tv[fn](on);
+  });
+}
+
+let loudCache = null;
+function noteLoudness(id) {
+  const r = state.project && state.project.result;
+  if (!r) return null;
+  if (!loudCache || loudCache.r !== r) {
+    const m = new Map();
+    for (const p of r.parts) {
+      const vals = p.notes.map((n) => n.velocity ?? n.amp).filter((v) => v > 0).sort((a, b) => a - b);
+      const med = vals.length ? vals[vals.length >> 1] : 0.5;
+      for (const n of p.notes) {
+        const v = n.velocity ?? n.amp;
+        if (v > 0) m.set(n.id, Math.max(0.15, Math.min(1, 0.7 * (v / med))));
+      }
+    }
+    loudCache = { r, m };
+  }
+  return loudCache.m.has(id) ? loudCache.m.get(id) : null;
+}
 
 /* ---------------- library ---------------- */
 async function refreshLibrary() {
@@ -1454,6 +1580,8 @@ $('optModel').addEventListener('change', () => setModelPref($('optModel').value)
 $('optNotes').value = notesPref();
 $('optNotes').addEventListener('change', () => setNotesPref($('optNotes').value));
 checkLastRun();
+// a while after start-up, drop model parts that older app versions used
+setTimeout(() => pruneAssetCache(), 20000);
 fillFavAdd();
 renderFavorites();
 engineInfo();

@@ -5,9 +5,11 @@
 // back before the next part starts.
 import { separateStage, analyzeStage } from '../engine/pipeline.js';
 import { parseChain, loadChain, loadParts } from '../engine/demucs.js';
+import { canaryCheck, loadBsrChain, BSR_CANARY } from '../engine/bsroformer.js';
 import { hrModel } from '../engine/hrgt.js';
 import { encodeWav } from '../engine/wav.js';
 import { fetchAsset, getManifest, baseUrl } from './assets.js';
+import { getBsrModel, BSR_CUTS } from './models.js';
 
 const BASE = baseUrl();
 let cancelled = false;
@@ -86,15 +88,43 @@ self.onmessage = async (e) => {
     }
     const backend = useGpu ? 'webgpu' : `wasm x${threads}`;
     if (msg.type === 'separate') {
-      const lite = !!opts.lite && !!mf.assets.demucsLite;
-      post('engine', { backend, lite });
+      const best = opts.sepModel === 'best';
+      const lite = !best && !!opts.lite && !!mf.assets.demucsLite;
+      post('engine', { backend, lite, model: best ? 'best' : lite ? 'lite' : 'full' });
       let demucs = null;
       const env = {
         ort,
         cancelled: () => cancelled,
         progress: (p) => post('progress', p),
         checkSeparation: useGpu,
-        getDemucs: async () => {
+        getDemucs: best ? async () => {
+          // BS-RoFormer, cut on this device from its Hugging Face file (app/models.js)
+          const cutName = opts.isolate === 'guitar+other' ? 'guitarOther' : 'guitar';
+          let bytes = await getBsrModel(cutName, (f, label) => post('progress', { stage: 'load', frac: 0.3 + 0.65 * f, label }), () => cancelled);
+          post('progress', { stage: 'load', frac: 0.97, label: 'Starting the guitar isolation model' });
+          let s;
+          try {
+            // one part per layer; without memory arenas each part's working memory goes back
+            // to the next one (peak under 0.9 GB instead of 3 GB)
+            s = await loadBsrChain(ort, bytes, { executionProviders: [useGpu ? 'webgpu' : 'wasm'], graphOptimizationLevel: 'all', enableCpuMemArena: false, enableMemPattern: false });
+          } catch (err) {
+            if (useGpu) throw gpuFailed(err);
+            throw err;
+          }
+          bytes = null;
+          s.stems = BSR_CUTS[cutName].stems;
+          if (useGpu) {
+            // some graphics chips run the model but get the numbers wrong
+            let c;
+            try { c = await canaryCheck(ort, s, BSR_CANARY); } catch (err) { c = { ok: false, worst: NaN, err }; }
+            if (!c.ok) {
+              try { await s.release(); } catch { /* ignore */ }
+              throw gpuFailed(new Error(`graphics chip self-test failed (${c.err ? c.err.message : c.worst.toFixed(1) + ' dB off'})`));
+            }
+          }
+          demucs = s;
+          return s;
+        } : async () => {
           let weights = await fetchAsset('demucsWeights', (f) => post('progress', { stage: 'load', frac: 0.3 + 0.65 * f, label: 'Downloading the guitar isolation model (once)' }));
           const chain = parseChain(await fetchAsset(lite ? 'demucsLite' : 'demucsFull'));
           post('progress', { stage: 'load', frac: 0.97, label: 'Starting the guitar isolation model' });

@@ -100,6 +100,31 @@ export function mean(arr) {
   return arr.length ? s / arr.length : 0;
 }
 
+/**
+ * The order to work through n chunks of a song in: `count` of them spread over the whole song
+ * first, then the rest (chunk results add up in any order). The separators use the first ones to
+ * tell early whether there is anything to separate at all (see probe in engine/pipeline.js).
+ */
+export function spreadOrder(n, count) {
+  const all = Array.from({ length: n }, (_, i) => i);
+  if (!(count > 0) || n <= count + 1) return all;
+  const first = [...new Set(Array.from({ length: count }, (_, k) => Math.min(n - 1, Math.floor(((k + 0.5) * n) / count))))];
+  const taken = new Set(first);
+  return first.concat(all.filter((i) => !taken.has(i)));
+}
+
+/** Energies of a separated chunk for that early look: the mix, the kept stems, and the rest. */
+export function chunkEnergies(xL, xR, pL, pR, from, to) {
+  let mix = 0, kept = 0, rest = 0;
+  for (let i = from; i < to; i++) {
+    const dl = xL[i] - pL[i], dr = xR[i] - pR[i];
+    mix += xL[i] * xL[i] + xR[i] * xR[i];
+    kept += pL[i] * pL[i] + pR[i] * pR[i];
+    rest += dl * dl + dr * dr;
+  }
+  return { mix, kept, rest };
+}
+
 export function midiToHz(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 export function hzToMidi(f) { return 69 + 12 * Math.log2(f / 440); }
 

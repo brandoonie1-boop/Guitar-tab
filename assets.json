@@ -1,5 +1,5 @@
 {
- "version": "f560862818",
+ "version": "cea5fc5055",
  "ort": {
   "wasm": "vendor/ort/ort.wasm.bundle.min.mjs",
   "webgpu": "vendor/ort/ort.webgpu.bundle.min.mjs"
@@ -73,6 +73,34 @@
    "sha": "9a5b1158c9",
    "parts": [
     "assets/beat-this-9a5b1158c9.0.bin"
+   ]
+  },
+  "soundElectric": {
+   "size": 4762317,
+   "sha": "9f0d9e7f12",
+   "parts": [
+    "assets/sound-electric-9f0d9e7f12.0.bin"
+   ]
+  },
+  "soundNylon": {
+   "size": 4233663,
+   "sha": "4741ead2cb",
+   "parts": [
+    "assets/sound-nylon-4741ead2cb.0.bin"
+   ]
+  },
+  "soundAcoustic": {
+   "size": 4718107,
+   "sha": "f6b4157f38",
+   "parts": [
+    "assets/sound-acoustic-f6b4157f38.0.bin"
+   ]
+  },
+  "soundCabs": {
+   "size": 16518,
+   "sha": "823da6bfd9",
+   "parts": [
+    "assets/sound-cabs-823da6bfd9.0.bin"
    ]
   }
  }

@@ -13,8 +13,29 @@ const CHUNK = 14 * 1024 * 1024;
 const r = (p) => path.join(ROOT, p);
 const hash = (buf) => crypto.createHash('sha256').update(buf).digest('hex').slice(0, 10);
 
+// A source that isn't on this machine (models/, the onnxruntime-web package) is rebuilt from the
+// parts already in assets/ (the same bytes), so the build also works without them.
+const OLD = fs.existsSync(r('assets.json')) ? JSON.parse(fs.readFileSync(r('assets.json'), 'utf8')) : { assets: {} };
+const sources = new Map();
+function source(src, key) {
+  if (sources.has(src)) return sources.get(src);
+  let buf;
+  if (fs.existsSync(src)) buf = fs.readFileSync(src);
+  else if (OLD.assets[key]) buf = Buffer.concat(OLD.assets[key].parts.map((p) => fs.readFileSync(r(p))));
+  else throw new Error(`missing ${src} (and no ${key} in assets.json to rebuild it from)`);
+  sources.set(src, buf);
+  return buf;
+}
+const KEY_OF = { 'ort-wasm': 'ortWasm', 'ort-wasm-gpu': 'ortWasmGpu', 'demucs-weights': 'demucsWeights', 'demucs-full': 'demucsFull', 'demucs-lite': 'demucsLite',
+  'basic-pitch': 'basicpitch', 'hrgt-weights': 'hrgtWeights', 'hrgt-chain': 'hrgtChain', 'beat-this': 'beatModel',
+  'sound-electric': 'soundElectric', 'sound-nylon': 'soundNylon', 'sound-acoustic': 'soundAcoustic', 'sound-cabs': 'soundCabs' };
+// tab player sounds (tools/build_guitar_sounds.py): built once from the sample datasets into sounds/
+const SOUNDS = [['sounds/electric.bin', 'soundElectric', 'sound-electric'], ['sounds/nylon.bin', 'soundNylon', 'sound-nylon'],
+  ['sounds/acoustic.bin', 'soundAcoustic', 'sound-acoustic'], ['sounds/cabs.bin', 'soundCabs', 'sound-cabs']]
+  .filter(([src, key]) => fs.existsSync(r(src)) || OLD.assets[key]);
+
 function chunkFile(src, name) {
-  const buf = fs.readFileSync(src);
+  const buf = source(src, KEY_OF[name]);
   const h = hash(buf);
   const parts = [];
   fs.mkdirSync(r('assets'), { recursive: true });
@@ -27,7 +48,12 @@ function chunkFile(src, name) {
   return { size: buf.length, sha: h, parts };
 }
 
-// remove stale chunks
+// read every source first (some come from the current chunks), then remove stale chunks
+const SOURCES = [[path.join(ortDir, 'ort-wasm-simd-threaded.wasm'), 'ortWasm'], [path.join(ortDir, 'ort-wasm-simd-threaded.asyncify.wasm'), 'ortWasmGpu'],
+  [r('models/demucs.weights.bin'), 'demucsWeights'], [r('models/demucs-343980.chain'), 'demucsFull'], [r('models/demucs-171990.chain'), 'demucsLite'],
+  [r('models/basic_pitch.onnx'), 'basicpitch'], [r('models/hrgt.weights.bin'), 'hrgtWeights'], [r('models/hrgt.chain'), 'hrgtChain'], [r('models/beat_this_small.f16.onnx'), 'beatModel']];
+for (const [src, key] of SOURCES) source(src, key);
+for (const [src, key] of SOUNDS) source(r(src), key);
 if (fs.existsSync(r('assets'))) for (const f of fs.readdirSync(r('assets'))) fs.rmSync(r('assets/' + f));
 
 const assets = {
@@ -45,6 +71,7 @@ const assets = {
   // beats and bar lines: Beat This! small (CPJKU, MIT), tools/export_beat_this.py
   beatModel: chunkFile(r('models/beat_this_small.f16.onnx'), 'beat-this'),
 };
+for (const [src, key, name] of SOUNDS) assets[key] = chunkFile(r(src), name);
 // the version changes whenever any app or engine file changes, so cached copies refresh
 const srcFiles = ['app', 'engine'].flatMap((d) => fs.readdirSync(r(d)).filter((f) => f.endsWith('.js') || f.endsWith('.html') || f.endsWith('.css')).sort().map((f) => fs.readFileSync(r(`${d}/${f}`))));
 const version = hash(Buffer.concat([Buffer.from(JSON.stringify(assets)), ...srcFiles]));
@@ -93,20 +120,20 @@ const shell = ['./', './index.html', 'manifest.webmanifest', 'assets.json',
   ...['app', 'engine'].flatMap((d) => fs.readdirSync(r(d)).filter((f) => f.endsWith('.js')).map((f) => `${d}/${f}`)),
   'vendor/ort/ort.wasm.bundle.min.mjs', 'vendor/ort/ort.webgpu.bundle.min.mjs',
   'vendor/alphatab/alphaTab.mjs', 'vendor/alphatab/alphaTab.core.mjs', 'vendor/alphatab/alphaTab.worker.mjs', 'vendor/alphatab/alphaTab.worklet.mjs',
-  'vendor/alphatab/font/Bravura.woff2', 'vendor/alphatab/font/Bravura.woff', 'vendor/alphatab/soundfont/sonivox.sf3',
+  'vendor/alphatab/font/Bravura.woff2', 'vendor/alphatab/font/Bravura.woff',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 const sw = fs.readFileSync(r('tools/sw.template.js'), 'utf8').replace('__VERSION__', version).replace('__SHELL__', JSON.stringify(shell, null, 1));
 fs.writeFileSync(r('sw.js'), sw);
 
 // ---------------------------------------------------------------------------
 // Artifact build (dist-artifact/): the Claude artifact host serves only common web types,
-// so the engine goes out as a real .wasm file and models/soundfont as base64 text parts.
+// so the engine goes out as a real .wasm file and models and sounds as base64 text parts.
 const AD = r('dist-artifact');
 fs.rmSync(AD, { recursive: true, force: true });
 fs.mkdirSync(path.join(AD, 'assets'), { recursive: true });
 const B64_RAW_CHUNK = 9 * 1024 * 1024; // -> 12 MB of text per part (host limit 16 MB per text file)
 function b64Asset(src, name) {
-  const buf = fs.readFileSync(src);
+  const buf = fs.existsSync(src) ? fs.readFileSync(src) : source(src, KEY_OF[name]);
   const h = hash(buf);
   const parts = [];
   let dl = 0;
@@ -120,10 +147,10 @@ function b64Asset(src, name) {
   return { size: buf.length, dl, sha: h, enc: 'b64', parts };
 }
 function wasmAsset(src, name) {
-  const buf = fs.readFileSync(src);
+  const buf = source(src, KEY_OF[name]);
   const h = hash(buf);
   const rel = `assets/${name}-${h}.wasm`;
-  fs.copyFileSync(src, path.join(AD, rel));
+  fs.writeFileSync(path.join(AD, rel), buf);
   return { size: buf.length, sha: h, enc: 'raw', parts: [rel] };
 }
 const artAssets = {
@@ -137,8 +164,8 @@ const artAssets = {
   hrgtWeights: b64Asset(r('models/hrgt.weights.bin'), 'hrgt-weights'),
   hrgtChain: b64Asset(r('models/hrgt.chain'), 'hrgt-chain'),
   beatModel: b64Asset(r('models/beat_this_small.f16.onnx'), 'beat-this'),
-  soundfont: b64Asset(r('vendor/alphatab/soundfont/sonivox.sf3'), 'soundfont'),
 };
+for (const [src, key, name] of SOUNDS) artAssets[key] = b64Asset(r(src), name);
 fs.writeFileSync(path.join(AD, 'assets.json'), JSON.stringify({ version, artifact: true, ort: manifest.ort, assets: artAssets }, null, 1));
 const artifact = `<title>Guitar Tab</title>
 <style>

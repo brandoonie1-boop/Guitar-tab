@@ -1,6 +1,6 @@
 // Service worker: offline app shell + cross-origin isolation (needed for multi-threaded processing).
 // Big model files are cached by the processing worker itself (Cache Storage), on first use.
-const VERSION = 'gt-shell-f560862818';
+const VERSION = 'gt-shell-cea5fc5055';
 const SHELL = [
  "./",
  "./index.html",
@@ -9,8 +9,11 @@ const SHELL = [
  "app/assets.js",
  "app/capture.js",
  "app/files.js",
+ "app/fretboard.js",
+ "app/guitarsynth.js",
  "app/helper.js",
  "app/main.js",
+ "app/models.js",
  "app/rec-worklet.js",
  "app/store.js",
  "app/tabview.js",
@@ -18,6 +21,7 @@ const SHELL = [
  "engine/basicpitch.js",
  "engine/beats.js",
  "engine/beatthis.js",
+ "engine/bsroformer.js",
  "engine/demucs.js",
  "engine/dsp.js",
  "engine/export.js",
@@ -25,6 +29,7 @@ const SHELL = [
  "engine/fretboard.js",
  "engine/hrgt.js",
  "engine/notes.js",
+ "engine/onnxprune.js",
  "engine/pipeline.js",
  "engine/pitchref.js",
  "engine/rhythm.js",
@@ -33,6 +38,7 @@ const SHELL = [
  "engine/strings-model.js",
  "engine/strings.js",
  "engine/techniques.js",
+ "engine/tone.js",
  "engine/tunings.js",
  "engine/wav.js",
  "vendor/ort/ort.wasm.bundle.min.mjs",
@@ -43,7 +49,6 @@ const SHELL = [
  "vendor/alphatab/alphaTab.worklet.mjs",
  "vendor/alphatab/font/Bravura.woff2",
  "vendor/alphatab/font/Bravura.woff",
- "vendor/alphatab/soundfont/sonivox.sf3",
  "icons/icon-192.png",
  "icons/icon-512.png",
  "icons/apple-touch-icon.png"

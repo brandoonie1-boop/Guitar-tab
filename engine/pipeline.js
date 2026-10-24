@@ -1,5 +1,6 @@
 // End-to-end: audio -> isolated guitar -> notes -> tuning/capo -> tab.
 import { separate, DEMUCS } from './demucs.js';
+import { separateBsr } from './bsroformer.js';
 import { runModel, outputToNotes, addPitchBends, frameTime, timeToFrame, BP } from './basicpitch.js';
 import { HR, hrActivations, hrNotes } from './hrgt.js';
 import { resample, toMono, rms } from './dsp.js';
@@ -14,6 +15,7 @@ import { detectTechniques } from './techniques.js';
 import { quantize, extendBeats, beatPos } from './rhythm.js';
 import { toAlphaTex, toAscii } from './export.js';
 import { tuningName } from './tunings.js';
+import { guessTone } from './tone.js';
 
 export const DEFAULT_OPTS = {
   isolate: 'guitar', // 'guitar' | 'guitar+other' | 'off'
@@ -120,12 +122,68 @@ export async function detectNotes(env, mono44, opts, cents, onProgress) {
 }
 
 /**
+ * How much of the recording is left once the separated guitar is taken out, relative to the
+ * guitar (dB): the median over 1.5 s stretches where the guitar plays. A band leaves more than
+ * the guitar (+2 to +11 dB on our band mixes); a guitar on its own leaves only the separation's
+ * errors (-9 to -32 dB on solo recordings).
+ */
+export function leftoverDb(L, R, gL, gR) {
+  const B = 2048, W = 32, n = Math.floor(Math.min(L.length, gL.length) / B);
+  const eg = new Float64Array(n), er = new Float64Array(n);
+  for (let b = 0; b < n; b++) {
+    let g = 0, r = 0;
+    for (let i = b * B; i < (b + 1) * B; i++) {
+      const dl = L[i] - gL[i], dr = R[i] - gR[i];
+      g += gL[i] * gL[i] + gR[i] * gR[i];
+      r += dl * dl + dr * dr;
+    }
+    eg[b] = g; er[b] = r;
+  }
+  const win = [];
+  let top = 0;
+  for (let b = 0; b + W <= n; b += 8) {
+    let g = 0, r = 0;
+    for (let k = b; k < b + W; k++) { g += eg[k]; r += er[k]; }
+    win.push([g, r]);
+    top = Math.max(top, g);
+  }
+  const db = win.filter(([g]) => g > top * 1e-3 && g > 0).map(([g, r]) => 10 * Math.log10((r + 1e-20) / g)).sort((a, b) => a - b);
+  return db.length ? db[db.length >> 1] : 0;
+}
+// below this the recording is taken to be a guitar on its own
+export const ALONE_DB = -6;
+
+/**
+ * The separators look at a few chunks spread over the song first. If every one that has sound
+ * in it leaves less than a tenth of the guitar (stricter than ALONE_DB: the rest of the song is
+ * not heard), the recording is a guitar on its own and the separation stops there, instead of
+ * separating the whole song only to use the recording as it is.
+ */
+export function soloProbe(count = 5) {
+  const chunks = [];
+  return {
+    count,
+    db: null,
+    add(e) { chunks.push(e); },
+    stop() {
+      const top = Math.max(0, ...chunks.map((c) => c.mix));
+      const heard = chunks.filter((c) => c.mix > top * 1e-3 && c.kept > 0);
+      if (!heard.length || heard.length < Math.min(3, chunks.length)) return false;
+      this.db = Math.max(...heard.map((c) => 10 * Math.log10((c.rest + 1e-20) / c.kept)));
+      return this.db < -10;
+    },
+  };
+}
+
+/**
  * Stage 1: isolate the guitar and build the signal the beat tracker listens to.
  * The app runs this in its own worker and ends that worker afterwards, so the separation
  * model's memory is gone before stage 2 starts.
  * @param audio {left, right, sr(=44100), name, offset?}. Takes ownership of the arrays (it
  *   clears audio.left/right) so memory can be released as soon as they are used.
  * @param env {ort, getDemucs, releaseDemucs?, progress, cancelled, checkSeparation?, fallbackToCpu?}
+ *   getDemucs may hand back a BS-RoFormer session instead (marked kind: 'bsr', with .stems and
+ *   optionally .check(chunk) to vet the first chunk's output)
  * @returns {gL, gR, mix22 (mono mix at 22.05 kHz for the beat tracker), stereo, sr, offset, duration, name}
  */
 export async function separateStage(audio, userOpts = {}, env) {
@@ -160,30 +218,51 @@ export async function separateStage(audio, userOpts = {}, env) {
     shouldCancel: cancelled,
     check: !!env.checkSeparation,
   };
+  let probe = soloProbe();
+  // BS-RoFormer (kind 'bsr') or Demucs
+  const run = (ort, s, o) => {
+    if (s.kind !== 'bsr') return separate(ort, s, left, right, o);
+    // a cut of BS-RoFormer that has no "other" stem widens the net with what it has
+    const k = Object.fromEntries(Object.entries(o.keep).filter(([n]) => s.stems.includes(n)));
+    return separateBsr(ort, s, left, right, { ...o, keep: k, check: o.check && s.check ? s.check : null });
+  };
   let st;
   try {
-    st = await separate(env.ort, session, left, right, sepOpts);
+    st = await run(env.ort, session, { ...sepOpts, probe });
   } catch (err) {
     // the fast (GPU) path failed or produced bad output: redo it on the processor
     if (!env.fallbackToCpu || (err && err.message === 'cancelled')) throw err;
     progress('separate', 0, 'Switching to the processor');
     const cpu = await env.fallbackToCpu(err);
     session = cpu.session;
-    st = await separate(cpu.ort, cpu.session, left, right, { ...sepOpts, check: false });
+    probe = soloProbe();
+    st = await run(cpu.ort, cpu.session, { ...sepOpts, check: false, probe });
   }
   session = null;
   if (env.releaseDemucs) await env.releaseDemucs();
-  const gL = st.guitar[0], gR = st.guitar[1];
-  if (st.other) {
-    const [oL, oR] = st.other;
-    for (let i = 0; i < gL.length; i++) { gL[i] += oL[i]; gR[i] += oR[i]; }
+  // a guitar on its own (a lesson, a cover): separating it only takes some of it away, so the
+  // recording itself is used, as with isolation off. Told early from a few chunks (soloProbe),
+  // or from the whole song once it is separated.
+  let gL, gR, leftover;
+  if (st.alone) {
+    gL = left; gR = right;
+    leftover = probe.db;
+  } else {
+    gL = st.guitar[0]; gR = st.guitar[1];
+    if (st.other) {
+      const [oL, oR] = st.other;
+      for (let i = 0; i < gL.length; i++) { gL[i] += oL[i]; gR[i] += oR[i]; }
+    }
+    leftover = leftoverDb(left, right, gL, gR);
+    if (leftover < ALONE_DB) { gL = left; gR = right; }
   }
+  const alone = leftover < ALONE_DB;
   st = null;
   // the beat tracker listens to the whole mix (what it was trained on), at 22.05 kHz
   const mix22 = mixForBeats(left, right);
   left = null; right = null;
   if (cancelled()) throw new Error('cancelled');
-  return { ...meta, gL, gR, mix22 };
+  return { ...meta, gL, gR, mix22, alone, leftoverDb: Math.round(leftover * 10) / 10 };
 }
 
 /**
@@ -239,6 +318,9 @@ export async function analyzeStage(stems, userOpts = {}, env) {
   progress('split', 1, 'Checking for more than one guitar');
   // 4. tuning reference + notes per part
   const tuningRef = estimateTuningCents(guitarMono, sr);
+  // what the guitar sounds like (acoustic, clean, crunch, distortion): the tab player's sound
+  let tone = null;
+  try { tone = guessTone(guitarMono, sr); } catch (err) { console.warn('tone', err); }
   guitarMono = null;
   const cents = tuningRef.confidence > 0.15 ? tuningRef.cents : 0;
   const sModel = opts.stringEvidence === false ? null : env.stringModel !== undefined ? env.stringModel : defaultStringModel();
@@ -288,6 +370,9 @@ export async function analyzeStage(stems, userOpts = {}, env) {
     name: stems.name || 'Song',
     duration, offset, sr,
     tuningCents: cents, tuningRef,
+    toneGuess: tone ? tone.tone : null,
+    // the recording was a guitar on its own and was used as it is (separateStage)
+    alone: !!stems.alone,
     splitInfo,
     rhythm: rh,
     stems: { guitar: [gL, gR] },

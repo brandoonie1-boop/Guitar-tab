@@ -39,6 +39,7 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
 .small { font-size: 13px; }
 
 .app { max-width: 980px; margin: 0 auto; padding-inline: 16px; padding-block: 0 140px; }
+body.fret-on .app { padding-bottom: 270px; }
 .topbar {
   position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
   display: flex; align-items: center; gap: 12px;
@@ -155,7 +156,8 @@ button.fact:hover { border-color: var(--accent); }
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .toolbar .spacer { flex: 1; }
-.tabwrap { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+/* isolation: alphaTab's cursor layer (z-index 1000) stays inside the tab, under the player bar */
+.tabwrap { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; isolation: isolate; }
 #tab { min-height: 160px; }
 .ascii { margin: 0; padding: 16px; overflow-x: auto; font: 13px/1.35 var(--font-mono); white-space: pre; }
 .at-cursor-bar { background: rgba(44, 95, 179, 0.10); }
@@ -187,6 +189,20 @@ button.fact:hover { border-color: var(--accent); }
 .player select { min-height: 40px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); padding: 0 8px; }
 .player .grow { flex: 1; min-width: 120px; }
 .player input[type="range"] { width: 100%; accent-color: var(--accent); }
+/* live fretboard (above the player controls) */
+.fretwrap { max-width: 980px; margin: 0 auto 8px; overflow-x: auto; }
+.live-neck { display: block; width: 100%; min-width: 560px; height: auto; max-height: 120px; }
+.live-neck .wood { fill: #efe6d8; }
+.live-neck .nut { fill: var(--fg); }
+.live-neck .fret { stroke: #b9b2a6; stroke-width: 2; }
+.live-neck .string { stroke: #6b6f78; }
+.live-neck .inlay { fill: #d8cdbb; }
+.live-neck .fretno { font: 11px system-ui, sans-serif; fill: var(--muted); }
+.live-neck .capo { fill: var(--accent); opacity: 0.85; }
+.live-neck .dot { opacity: 0; transition: opacity 60ms linear; }
+.live-neck .dot.on { opacity: 1; }
+.live-neck .dot circle { fill: var(--accent); stroke: #fff; stroke-width: 1.5; }
+.live-neck .dot text { font: 700 10px system-ui, sans-serif; fill: #fff; }
 
 .dialog-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 50; display: grid; place-items: end center; }
 .dialog {
@@ -212,5 +228,7 @@ button.fact:hover { border-color: var(--accent); }
   .player select { min-height: 38px; }
   .player .grow { flex-basis: 100%; order: 5; min-width: 0; }
   .player .time { order: 4; margin-left: auto; min-width: 0; }
+  /* the whole neck in view (frets get narrower) rather than a scrolled part of it */
+  .live-neck { max-height: 92px; min-width: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }

@@ -4,6 +4,12 @@
 
 const BASE = new URL('../', import.meta.url).href;
 let manifestP = null;
+// One cache for every version: part file names carry a hash of their contents, so a part that
+// didn't change between app versions is never downloaded again.
+const CACHE = 'guitar-tab-assets';
+async function openCache() {
+  try { return self.caches ? await caches.open(CACHE) : null; } catch { return null; }
+}
 
 export function baseUrl() { return BASE; }
 
@@ -60,8 +66,7 @@ export async function fetchAsset(key, onProgress) {
   const a = m.assets[key];
   if (!a) throw new Error('missing asset ' + key);
   const enc = a.enc || 'raw';
-  let cache = null;
-  try { cache = self.caches ? await caches.open('guitar-tab-assets-' + m.version) : null; } catch { cache = null; }
+  const cache = await openCache();
   const total = a.dl || a.size;
   let loaded = 0;
   const bump = (n) => { loaded += n; if (onProgress) onProgress(Math.min(1, loaded / total)); };
@@ -101,8 +106,7 @@ export async function fetchAsset(key, onProgress) {
  */
 export async function prefetchAssets(keys, { shouldStop } = {}) {
   const m = await getManifest();
-  let cache = null;
-  try { cache = self.caches ? await caches.open('guitar-tab-assets-' + m.version) : null; } catch { cache = null; }
+  const cache = await openCache();
   if (!cache) return;
   for (const key of keys) {
     const a = m.assets[key];
@@ -124,4 +128,20 @@ export async function prefetchAssets(keys, { shouldStop } = {}) {
 
 export async function hasAsset(key) {
   try { const m = await getManifest(); return !!m.assets[key]; } catch { return false; }
+}
+
+/**
+ * Free the space of parts that the current version no longer uses, and of the per-version
+ * caches older versions kept.
+ */
+export async function pruneAssetCache() {
+  if (!self.caches) return;
+  try {
+    const m = await getManifest();
+    for (const k of await caches.keys()) if (k.startsWith('guitar-tab-assets-')) await caches.delete(k);
+    const cache = await openCache();
+    if (!cache) return;
+    const keep = new Set(Object.values(m.assets).flatMap((a) => a.parts.map((p) => BASE + p + '#bytes')));
+    for (const req of await cache.keys()) if (!keep.has(req.url)) await cache.delete(req);
+  } catch { /* nothing to clean */ }
 }

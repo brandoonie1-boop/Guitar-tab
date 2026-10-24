@@ -31,6 +31,10 @@ node tests/eval_strings.mjs egset egset.json EGSet12 acts/egset sf/model.json --
 | Script | What it checks |
 |---|---|
 | `test_demucs.mjs` | JS STFT/iSTFT + ONNX Demucs vs. the PyTorch reference (should be ~80 dB SNR) |
+| `test_bsroformer.mjs` | BS-RoFormer wrapper (`engine/bsroformer.js`) with a stand-in model that hands the mix back: STFT/iSTFT, chunking, padding and cross-fades must give the input back exactly |
+| `test_onnxprune.mjs` | the on-device model cutter (`engine/onnxprune.js`) on a small hand-made model: only what the kept outputs need stays, weights unchanged, the same bytes however the download arrives in pieces |
+| `test_guitarsynth.mjs` | the tab player (`app/guitarsynth.js`): note timing from the tab, ties, slides, bends, hammer-ons, loudness |
+| `synth_render.mjs` | renders a tab with every tab-player sound to WAV files through the real page (headless Chromium), to listen to |
 | `test_hrgt.mjs` | guitar transcription model: JS log-mel, ONNX parts and note decoding vs. PyTorch (reference from `tools/make_hrgt_ref.py`) |
 | `eval_hrgt_gs.mjs` | note accuracy of the guitar transcription model on GuitarSet, through the app's JS code |
 | `analyze_note_errors.mjs` | note errors by kind (missed re-attacks, octave/harmonic ghosts, ...) for basic-pitch or (`--hr`) the transcription model |

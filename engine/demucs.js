@@ -3,6 +3,7 @@
 // demucs.htdemucs does in PyTorch. Validated against the PyTorch model.
 
 import { RealFFT, hannPeriodic } from './fft.js';
+import { spreadOrder, chunkEnergies } from './dsp.js';
 
 export const DEMUCS = {
   sr: 44100,
@@ -116,8 +117,9 @@ function addMonoOrStereo(acc, chunkL, chunkR, offset, len, delta, weight, mono) 
  * @param {Float32Array} left 44.1 kHz
  * @param {Float32Array} right 44.1 kHz
  * @param {object} opts { keep: {guitar:'stereo', drums:'mono', ...}, segment (samples the model was exported with),
- *                        overlap, onProgress(frac), shouldCancel(), check }
- * @returns {Promise<object>} map source -> [Float32Array] (1 or 2 channels)
+ *                        overlap, onProgress(frac), shouldCancel(), check,
+ *                        probe: {count, add(energies), stop()} as in engine/bsroformer.js }
+ * @returns {Promise<object>} map source -> [Float32Array] (1 or 2 channels), or {alone: true}
  */
 export async function separate(ort, session, left, right, opts = {}) {
   const keep = opts.keep || { guitar: 'stereo', other: 'stereo', drums: 'mono' };
@@ -159,9 +161,16 @@ export async function separate(ort, session, left, right, opts = {}) {
   const keptIdx = Object.keys(keep).map((n) => srcIndex[n]);
   const sourcesTensor = (idx) => new ort.Tensor('int64', BigInt64Array.from(idx.map(BigInt)), [idx.length]);
 
-  for (let ci = 0; ci < offsets.length; ci++) {
+  // a few chunks spread over the song first when probing (engine/bsroformer.js)
+  const order = spreadOrder(offsets.length, opts.probe ? opts.probe.count : 0);
+  const nProbe = opts.probe && order.length > opts.probe.count + 1 ? opts.probe.count : 0;
+  const pL = nProbe ? new Float32Array(SEG) : null, pR = nProbe ? new Float32Array(SEG) : null;
+  for (let k = 0; k < order.length; k++) {
     if (opts.shouldCancel && opts.shouldCancel()) throw new Error('cancelled');
+    const ci = order[k];
     const offset = offsets[ci];
+    const probing = k < nProbe;
+    if (probing) { pL.fill(0); pR.fill(0); }
     const chunkLen = Math.min(SEG, length - offset);
     const delta = SEG - chunkLen;
     const start = offset - (delta >> 1);
@@ -180,7 +189,7 @@ export async function separate(ort, session, left, right, opts = {}) {
       mag: new ort.Tensor('float32', mag, [1, 4, BINS, FR]),
       mix: new ort.Tensor('float32', mixData, [1, 2, SEG]),
     };
-    const checking = opts.check && ci === 0;
+    const checking = opts.check && k === 0;
     const want = session.select && !checking ? keptIdx : allIdx;
     if (session.select) feeds.sources = sourcesTensor(want);
     const res = await session.run(feeds);
@@ -200,11 +209,18 @@ export async function separate(ort, session, left, right, opts = {}) {
       const sBase = s * 4 * BINS * FR;
       ispecAdd(g, spec, spec, sBase + 0 * BINS * FR, sBase + 1 * BINS * FR, tmpL);
       ispecAdd(g, spec, spec, sBase + 2 * BINS * FR, sBase + 3 * BINS * FR, tmpR);
+      if (probing) for (let i = 0; i < SEG; i++) { pL[i] += tmpL[i]; pR[i] += tmpR[i]; }
       addMonoOrStereo(out[name], tmpL, tmpR, offset, chunkLen, delta, weight, mode !== 'stereo');
     }
     if (res.spec.dispose) res.spec.dispose();
     if (res.wave.dispose) res.wave.dispose();
-    if (opts.onProgress) opts.onProgress((ci + 1) / offsets.length);
+    if (probing) {
+      // in the model's normalised units (the stems add up to the normalised mix)
+      const d0 = delta >> 1;
+      opts.probe.add(chunkEnergies(mixL, mixR, pL, pR, d0, d0 + chunkLen));
+      if (k === nProbe - 1 && opts.probe.stop()) return { alone: true };
+    }
+    if (opts.onProgress) opts.onProgress((k + 1) / offsets.length);
     // yield to the event loop so progress messages get out
     await new Promise((r) => setTimeout(r, 0));
   }
