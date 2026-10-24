@@ -11,7 +11,14 @@ of each recording, already shifted to line up with its audio.
   recordings where under 60 % of the onsets line up are left out,
   and so are the bend and harmonics takes (the written pitch does not describe the sound).
 
+  GuitarSet anchor (https://zenodo.org/records/3371780, CC BY 4.0): microphone recordings of the
+  takes the tests do not use (not sorted(takes)[::3], not the training script's validation takes),
+  without their notes: training only asks the new model to keep giving the original model's
+  output on this clean acoustic guitar (distillation), so it doesn't drift away from acoustic
+  guitar while it learns distortion. No annotations are used.
+
 usage: python tools/hrgt_data.py gtechs <Guitar-TECHS dir> <out dir>
+       python tools/hrgt_data.py gs-anchor <GuitarSet annotations.json> <audio dir> <out dir>
 """
 import argparse
 import glob
@@ -123,14 +130,34 @@ def gtechs(src, out):
     print('recordings', len(man), 'hours', round(sum(m['dur'] for m in man) / 3600, 2), 'notes', sum(len(m['notes']) for m in man))
 
 
+def gs_anchor(ann_path, audio_dir, out):
+    os.makedirs(out, exist_ok=True)
+    names = sorted(json.load(open(ann_path)))
+    test = set(names[::3])
+    val = set(names[1::3][::5][:8])  # tools/train_hrgt.py validation takes
+    man = []
+    for nm in names:
+        if nm in test or nm in val:
+            continue
+        x = load16k(os.path.join(audio_dir, nm + '_mic.wav'))
+        pk = np.abs(x).max() + 1e-9
+        np.save(os.path.join(out, nm + '.npy'), np.round(x / pk * 32000).astype(np.int16))
+        man.append({'name': nm, 'source': 'guitarset', 'group': nm[:2], 'set': 'gs_anchor', 'take': nm, 'kind': 'mic',
+                    'audio': nm + '.npy', 'dur': len(x) / SR, 'notes': []})
+    json.dump(man, open(os.path.join(out, 'manifest.json'), 'w'))
+    print('recordings', len(man), 'hours', round(sum(m['dur'] for m in man) / 3600, 2), '(no notes: distillation only)')
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('kind', choices=['gtechs'])
+    ap.add_argument('kind', choices=['gtechs', 'gs-anchor'])
     ap.add_argument('src')
-    ap.add_argument('out')
+    ap.add_argument('rest', nargs='+')
     a = ap.parse_args()
     if a.kind == 'gtechs':
-        gtechs(a.src, a.out)
+        gtechs(a.src, a.rest[0])
+    else:
+        gs_anchor(a.src, a.rest[0], a.rest[1])
 
 
 if __name__ == '__main__':

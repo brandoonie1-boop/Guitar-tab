@@ -13,10 +13,13 @@ sometimes a room, a compressor and noise; or left clean. Targets:
     move to the original model's onset peak within 60 ms on the clean clip (its MIDI pickup lags
     more on the low strings) and short notes the model cannot hear there are left out (pickup
     glitches); synthetic labels are exact.
+A source marked always clean (the GuitarSet anchor of tools/hrgt_data.py, label weight 0) only
+asks the new model to keep the original's output on clean acoustic guitar, which the electric
+training data would otherwise let it drift away from.
 Frozen: the input normalisation, every branch's first convolution block and the velocity branch's
 convolutions; BatchNorm statistics stay as trained.
 
-usage: python tools/train_hrgt.py <guitar-fl.pth> <out dir> --data <dir>:<weight>:<label weight>:<snap 0|1> ...
+usage: python tools/train_hrgt.py <guitar-fl.pth> <out dir> --data <dir>:<weight>:<label weight>:<snap 0|1>[:<always clean>] ...
          --cabs assets/sound-cabs-<sha>.0.bin --gs <GuitarSet annotations.json>:<audio dir>
          [--steps 3000] [--batch 4] [--lr 1e-4] [--val-every 300] [--threads 4] [--bench]
 Writes <out dir>/last.pt (resumable), step_<n>.pt at each validation, log.jsonl.
@@ -175,9 +178,9 @@ def tanh_amp(x, g, sr=SR):
 # ---- data ---------------------------------------------------------------------------------------
 
 class Source:
-    def __init__(self, d, weight, gt_w, snap, exclude_sets=()):
+    def __init__(self, d, weight, gt_w, snap, clean_only=False, exclude_sets=()):
         man = [m for m in json.load(open(os.path.join(d, 'manifest.json'))) if m.get('set') not in exclude_sets]
-        self.weight, self.gt_w, self.snap = weight, gt_w, snap
+        self.weight, self.gt_w, self.snap, self.clean_only = weight, gt_w, snap, clean_only
         self.audio = [np.load(os.path.join(d, m['audio']), mmap_mode='r') for m in man]
         self.notes = [np.array([n[:3] for n in m['notes']], np.float64).reshape(-1, 3) for m in man]
         self.names = [m['name'] for m in man]
@@ -317,7 +320,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('ckpt')
     ap.add_argument('out')
-    ap.add_argument('--data', action='append', required=True, help='<dir>:<weight>:<label weight>:<snap 0|1>')
+    ap.add_argument('--data', action='append', required=True, help='<dir>:<weight>:<label weight>:<snap 0|1>[:<always clean 0|1>]')
     ap.add_argument('--gs', help='<GuitarSet annotations.json>:<audio dir> for validation')
     ap.add_argument('--cabs', help='cabinet impulse responses (48 kHz): a folder of .wav files, or the app\'s assets/sound-cabs-*.bin')
     ap.add_argument('--steps', type=int, default=3000)
@@ -351,11 +354,13 @@ def main():
     sources = []
     gtechs_dir = None
     for spec in a.data:
-        d, w, gw, snap = spec.rsplit(':', 3)
-        sources.append(Source(d, float(w), float(gw), snap == '1', exclude_sets=('P3_music',)))
+        d, w, gw, snap, *more = spec.split(':')
+        clean_only = bool(more) and more[0] == '1'
+        sources.append(Source(d, float(w), float(gw), snap == '1', clean_only, exclude_sets=('P3_music',)))
         if os.path.basename(os.path.normpath(d)) == 'gtechs':
             gtechs_dir = d
-        print(f'data {d}: {len(sources[-1].names)} recordings, {sources[-1].hours:.2f} h, weight {w}, label weight {gw}, snap {snap}', flush=True)
+        print(f'data {d}: {len(sources[-1].names)} recordings, {sources[-1].hours:.2f} h, weight {w}, label weight {gw}, snap {snap}'
+              f'{", always clean" if clean_only else ""}', flush=True)
     sw = np.array([s.weight for s in sources])
     sw /= sw.sum()
 
@@ -402,7 +407,10 @@ def main():
             src = sources[rng.choice(len(sources), p=sw)]
             x, notes = src.sample(rng)
             clean.append(x)
-            proc.append(x * (10 ** (rng.uniform(-30, -10) / 20) / (np.sqrt(np.mean(x ** 2)) + 1e-9)) if rng.random() < a.clean_p else rig(x, rng, cabs))
+            if src.clean_only or rng.random() < a.clean_p:
+                proc.append(x * (10 ** (rng.uniform(-30, -10) / 20) / (np.sqrt(np.mean(x ** 2)) + 1e-9)))
+            else:
+                proc.append(rig(x, rng, cabs))
             gts.append(notes)
             gtw.append(src.gt_w)
             snaps.append(src.snap)
