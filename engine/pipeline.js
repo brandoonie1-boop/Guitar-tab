@@ -28,7 +28,9 @@ export const DEFAULT_OPTS = {
   // notes: 'hr' = the guitar transcription model when it is available, 'basic' = basic-pitch
   notesModel: 'hr',
   hrHop: 500, // frames between the model's 10 s windows (500 = half overlap, as trained)
-  hrOnset: 0.4, // onset threshold (GuitarSet onset F1 89.5 at 0.3, 90.2 at 0.4)
+  // onset threshold: 0.4 suited the original model; the tuned one finds more notes at 0.3
+  // (validation takes, notes found: guitars isolated from a band 80.4 -> 81.0)
+  hrOnset: 0.3,
   hrOffset: 0.3,
   hrFrame: 0.1,
   // basic-pitch note thresholds tuned on GuitarSet (onset F1 0.768 -> 0.815)
