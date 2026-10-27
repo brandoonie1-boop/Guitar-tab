@@ -15,7 +15,7 @@ export const BSR_CUTS = {
   guitarOther: { keep: [4, 2], stems: ['guitar', 'other'], size: 153292675, sha256: '3e68796162314039b73b1d0dd5b1325b3049835b8684a54bdd4e7ec67c00f5cf' },
 };
 // 6 attention slices: a WebGPU shader may use at most 8 buffers (a split into 6 uses 8)
-const CUT_OPTS = { attentionGroups: 6, chain: true };
+export const CUT_OPTS = { attentionGroups: 6, chain: true };
 export const BSR_DOWNLOAD_MB = Math.round(SRC.size / 1e6);
 
 const CACHE = 'guitar-tab-models'; // not tied to the app version: the cut never changes

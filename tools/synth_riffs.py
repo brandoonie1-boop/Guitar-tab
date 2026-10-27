@@ -270,7 +270,17 @@ def section_double(part, r, t, bars, beat, tun):
 STYLES = [(section_chug, 26), (section_power_sustain, 12), (section_lead, 22), (section_strum, 14), (section_arpeggio, 12), (section_double, 14)]
 
 
-def render(part, bank, r, player, signal):
+PICKUPS = {'bridge': (0.04, 0.10), 'middle': (0.12, 0.20), 'neck': (0.22, 0.30)}
+
+
+def pick_pickup(r, which='any'):
+    """Fraction of the string from the bridge where the part's pickup sits (0: as recorded)."""
+    if which == 'any':
+        which = r.choice(['none', 'bridge', 'bridge', 'middle', 'neck'])
+    return 0.0 if which == 'none' else float(r.uniform(*PICKUPS[which]))
+
+
+def render(part, bank, r, player, signal, pickup=0.0):
     """Mix the part's notes (48 kHz) and return (audio, labelled notes)."""
     notes = sorted(part.notes, key=lambda n: n[0])
     if not notes:
@@ -301,12 +311,27 @@ def render(part, bank, r, player, signal):
             if n <= int(0.03 * SR):
                 continue
             seg = x[:n].copy()
+            if pickup:
+                # a pickup at fraction d of the string from the bridge hears overtone k as sin(pi k d):
+                # for one note that is the comb x(t) - x(t - d / f0). Near the bridge the fundamental
+                # gets thin and the overtones carry the note (the classic bridge-pickup sound).
+                lag = pickup * SR / (440 * 2 ** ((pitch - 69) / 12))
+                k0 = int(lag)
+                fr = lag - k0
+                if k0 + 1 < n:
+                    d = np.zeros(n, np.float32)
+                    d[k0:] += (1 - fr) * seg[:n - k0]
+                    d[k0 + 1:] += fr * seg[:n - k0 - 1]
+                    rms0 = np.sqrt(np.mean(seg[: int(0.3 * SR)] ** 2)) + 1e-9
+                    seg = seg - d
+                    seg *= rms0 / (np.sqrt(np.mean(seg[: int(0.3 * SR)] ** 2)) + 1e-9)
             g = (0.25 + 0.75 * vel) ** 1.6
             if pm:
+                # the palm damps the string: everything dies fast, the top end a bit faster
                 tau = r.uniform(0.05, 0.14)
                 seg *= np.exp(-np.arange(n) / (tau * SR)).astype(np.float32)
-                a = np.exp(-2 * np.pi * r.uniform(700, 1800) / SR)
-                seg = lfilter([1 - a], [1, -a], seg).astype(np.float32) * 1.6
+                a = np.exp(-2 * np.pi * r.uniform(1500, 4000) / SR)
+                seg = lfilter([1 - a], [1, -a], seg).astype(np.float32) * 1.3
                 end = min(end, t0 + 3 * tau)
             # release: the string is damped over 10-40 ms at its end
             rel = int(r.uniform(0.01, 0.04) * SR)
@@ -329,6 +354,8 @@ def main():
     ap.add_argument('out')
     ap.add_argument('--minutes', type=float, default=150)
     ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--pickup', default='none', choices=['none', 'any', 'bridge', 'middle', 'neck'],
+                    help='simulated pickup position for each part (none: the recorded notes as they are)')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     bank = Bank(a.notes)
@@ -349,13 +376,14 @@ def main():
             bars = int(r.integers(2, 7))
             style(part, r, t, bars, beat, tun)
             t += bars * 4 * beat + r.choice([0, 0, beat, 2 * beat])
-        y, labels = render(part, bank, r, player, signal)
+        pickup = pick_pickup(r, a.pickup)
+        y, labels = render(part, bank, r, player, signal, pickup)
         if y is None or len(labels) < 10:
             continue
         name = f'synth_{a.seed}_{i:04d}'
         np.save(os.path.join(a.out, name + '.npy'), np.round(y * 32000).astype(np.int16))
         man.append({'name': name, 'source': 'synth', 'group': player, 'set': 'synth', 'take': name, 'kind': 'di' if signal == 'directinput' else 'mic',
-                    'audio': name + '.npy', 'dur': len(y) / 16000, 'tuning': tun, 'notes': labels})
+                    'audio': name + '.npy', 'dur': len(y) / 16000, 'tuning': tun, 'pickup': round(pickup, 3), 'notes': labels})
         total += len(y) / 16000
         i += 1
         if i % 20 == 0:

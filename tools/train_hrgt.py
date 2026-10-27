@@ -166,6 +166,28 @@ def rig(x, r, cabs, style=None):
     return np.clip(y, -1, 1).astype(np.float32)
 
 
+def separate_sim(g, b, r):
+    """A guitar isolated from guitar g + backing b (16 kHz) by a simulated imperfect separator:
+    the ideal ratio mask on the mixture's spectrogram, sharpened or softened, smeared over time
+    and frequency, with a floor that lets some of the band through and random jitter (a mask
+    estimator like BS-RoFormer errs in these ways: bleed where the band is loud, a thinned guitar
+    under it, softened attacks)."""
+    from scipy.ndimage import uniform_filter
+    from scipy.signal import istft, stft
+    n = len(g)
+    _, _, G = stft(g, SR, nperseg=1024, noverlap=768)
+    _, _, B = stft(b, SR, nperseg=1024, noverlap=768)
+    pg, pb = np.abs(G) ** 2, np.abs(B) ** 2
+    m = pg / (pg + pb + 1e-10)
+    m = m ** r.uniform(0.6, 1.8)  # softer or harder decisions
+    m = uniform_filter(m, size=(int(r.integers(1, 6)), int(r.integers(1, 5))), mode='nearest')  # smeared (freq, time)
+    m = m * np.exp(r.normal(0, r.uniform(0.05, 0.35), m.shape))  # jitter
+    floor = r.uniform(0.0, 0.15)  # the band leaking through (up to about -16 dB)
+    m = np.clip(floor + (1 - floor) * m, 0, 1)
+    _, y = istft(m * (G + B), SR, nperseg=1024, noverlap=768)
+    return y[:n].astype(np.float32) if len(y) >= n else np.pad(y, (0, n - len(y))).astype(np.float32)
+
+
 def tanh_amp(x, g, sr=SR):
     """The JS test's simulated amp (tests/eval_notes.mjs --fx tanh:G)."""
     pk = np.abs(x).max() + 1e-9
@@ -178,31 +200,74 @@ def tanh_amp(x, g, sr=SR):
 # ---- data ---------------------------------------------------------------------------------------
 
 class Source:
-    def __init__(self, d, weight, gt_w, snap, clean_only=False, exclude_sets=()):
+    """Recordings of one manifest (tools/hrgt_data.py, tools/synth_riffs.py). Per recording, a
+    manifest entry can say kd: 0 (no distillation: the original model can't hear it clean, e.g. a
+    guitar recorded distorted) and norig: true (already through an amp: no rig on top)."""
+
+    def __init__(self, d, weight, gt_w, snap, clean_only=False, band=0.0, kd=1.0, exclude_sets=()):
         man = [m for m in json.load(open(os.path.join(d, 'manifest.json'))) if m.get('set') not in exclude_sets]
-        self.weight, self.gt_w, self.snap, self.clean_only = weight, gt_w, snap, clean_only
+        self.weight, self.gt_w, self.snap, self.clean_only, self.band = weight, gt_w, snap, clean_only, band
         self.audio = [np.load(os.path.join(d, m['audio']), mmap_mode='r') for m in man]
         self.notes = [np.array([n[:3] for n in m['notes']], np.float64).reshape(-1, 3) for m in man]
         self.names = [m['name'] for m in man]
+        self.kd = [kd * float(m.get('kd', 1)) for m in man]
+        self.norig = [bool(m.get('norig', False)) for m in man]
         dur = np.array([len(a) for a in self.audio], float)
         self.p = dur / dur.sum()
         self.hours = dur.sum() / SR / 3600
 
     def sample(self, r):
+        """(clip, notes in the clip, kd weight, may go through a rig)"""
         i = r.choice(len(self.audio), p=self.p)
         a = self.audio[i]
+        n = self.notes[i]
         if len(a) <= CLIP:
             s = 0
             x = np.zeros(CLIP, np.float32)
             x[:len(a)] = a[:] / 32000
         else:
-            s = int(r.integers(0, len(a) - CLIP))
+            if len(n) and r.random() < 0.85:  # mostly where the part plays (song stems are often silent)
+                s = int(np.clip((n[r.integers(len(n)), 0] - r.uniform(0.5, 9.5)) * SR, 0, len(a) - CLIP))
+            else:
+                s = int(r.integers(0, len(a) - CLIP))
             x = np.asarray(a[s:s + CLIP], np.float32) / 32000
         t0 = s / SR
-        n = self.notes[i]
         sel = n[(n[:, 1] > t0 - 0.1) & (n[:, 0] < t0 + CLIP / SR + 0.1)].copy()
         sel[:, :2] -= t0
-        return x, sel
+        return x, sel, self.kd[i], not self.norig[i]
+
+
+class Backing:
+    """Band backing for mixing (tools/hrgt_data.py slakh: per song drums.npy, bass.npy, other.npy,
+    16 kHz; no guitars): a random stretch of a random song, the parts at random levels."""
+
+    def __init__(self, d):
+        self.songs = []
+        for s in sorted(os.listdir(d)):
+            parts = [np.load(os.path.join(d, s, f), mmap_mode='r') for f in ('drums.npy', 'bass.npy', 'other.npy') if os.path.exists(os.path.join(d, s, f))]
+            if parts:
+                self.songs.append(parts)
+
+    def sample(self, r, n=CLIP):
+        parts = self.songs[r.integers(len(self.songs))]
+        L = min(len(p) for p in parts)
+        s = int(r.integers(0, max(1, L - n)))
+        y = np.zeros(n, np.float32)
+        for p in parts:
+            if r.random() < 0.85:  # now and then a part sits out
+                seg = np.asarray(p[s:s + n], np.float32) / 32000
+                y[:len(seg)] += seg * 10 ** (r.uniform(-8, 2) / 20)
+        return y
+
+
+def band_mix(g, backing, r):
+    """The (processed) guitar g in a band, isolated again by the simulated separator."""
+    b = backing.sample(r, len(g))
+    gr, br = np.sqrt(np.mean(g ** 2)) + 1e-9, np.sqrt(np.mean(b ** 2)) + 1e-9
+    if br < 1e-5:
+        return g
+    b = b * (gr / br) * 10 ** (-r.uniform(-10, 3) / 20)  # guitar from 10 dB under the band to 3 dB over it
+    return separate_sim(g, b, r)
 
 
 def gt_targets(notes, teacher_onset=None, snap=False):
@@ -284,13 +349,15 @@ def bce(p, t, w=None):
 
 # ---- validation -----------------------------------------------------------------------------------
 
-def val_sets(gtechs_dir, gs, cabs):
+def val_sets(gtechs_dir, gs, cabs, backing=None):
     sets = {}
     if gtechs_dir:
         man = [m for m in json.load(open(os.path.join(gtechs_dir, 'manifest.json'))) if m['set'] == 'P3_music' and m['kind'] == 'di']
         items = [(np.load(os.path.join(gtechs_dir, m['audio'])).astype(np.float32) / 32000, m['notes']) for m in man[:6]]
         sets['p3_clean'] = items
         sets['p3_heavy'] = [(rig(x, np.random.default_rng(1000 + i), cabs, style='high'), n) for i, (x, n) in enumerate(items)]
+        if backing:
+            sets['p3_band'] = [(band_mix(x, backing, np.random.default_rng(2000 + i)), n) for i, (x, n) in enumerate(items)]
     if gs:
         ann_path, audio_dir = gs
         ann = json.load(open(ann_path))
@@ -302,6 +369,8 @@ def val_sets(gtechs_dir, gs, cabs):
             items.append((x, [(t, t + d, v) for t, d, v, *_ in ann[nm]['notes']]))
         sets['gs_clean'] = items
         sets['gs_tanh30'] = [(tanh_amp(x, 30), n) for x, n in items]
+        if backing:
+            sets['gs_band'] = [(band_mix(x, backing, np.random.default_rng(3000 + i)), n) for i, (x, n) in enumerate(items)]
     return sets
 
 
@@ -320,8 +389,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('ckpt')
     ap.add_argument('out')
-    ap.add_argument('--data', action='append', required=True, help='<dir>:<weight>:<label weight>:<snap 0|1>[:<always clean 0|1>]')
+    ap.add_argument('--data', action='append', required=True,
+                    help='<dir>:<weight>:<label weight>:<snap 0|1>[:<always clean 0|1>], or '
+                         '<dir>,w=..,gt=..,snap=0|1,clean=0|1,band=<share mixed into a band>,kd=<distillation weight>')
+    ap.add_argument('--init', help='start the new model from this checkpoint instead of the original (the teacher stays the original)')
+    ap.add_argument('--backing', help='band backing (tools/hrgt_data.py slakh) for sources with band=...')
     ap.add_argument('--gs', help='<GuitarSet annotations.json>:<audio dir> for validation')
+    ap.add_argument('--val-extra', action='append', default=[], help='<name>=<manifest dir>: more validation (e.g. synthetic parts through a bridge pickup)')
     ap.add_argument('--cabs', help='cabinet impulse responses (48 kHz): a folder of .wav files, or the app\'s assets/sound-cabs-*.bin')
     ap.add_argument('--steps', type=int, default=3000)
     ap.add_argument('--batch', type=int, default=4)
@@ -354,20 +428,29 @@ def main():
     sources = []
     gtechs_dir = None
     for spec in a.data:
-        d, w, gw, snap, *more = spec.split(':')
-        clean_only = bool(more) and more[0] == '1'
-        sources.append(Source(d, float(w), float(gw), snap == '1', clean_only, exclude_sets=('P3_music',)))
+        if '=' in spec:
+            d, *kv = spec.split(',')
+            o = dict(x.split('=') for x in kv)
+            w, gw, snap, clean_only, band = float(o.get('w', 1)), float(o.get('gt', 0.5)), o.get('snap') == '1', o.get('clean') == '1', float(o.get('band', 0))
+            kd_w = float(o.get('kd', 1))
+        else:
+            d, w, gw, snap, *more = spec.split(':')
+            w, gw, snap, clean_only, band, kd_w = float(w), float(gw), snap == '1', bool(more) and more[0] == '1', 0.0, 1.0
+        sources.append(Source(d, w, gw, snap, clean_only, band, kd_w, exclude_sets=('P3_music',)))
         if os.path.basename(os.path.normpath(d)) == 'gtechs':
             gtechs_dir = d
         print(f'data {d}: {len(sources[-1].names)} recordings, {sources[-1].hours:.2f} h, weight {w}, label weight {gw}, snap {snap}'
-              f'{", always clean" if clean_only else ""}', flush=True)
+              f'{", always clean" if clean_only else ""}{f", {band:.0%} in a band" if band else ""}{f", distillation x{kd_w:g}" if kd_w != 1 else ""}', flush=True)
     sw = np.array([s.weight for s in sources])
     sw /= sw.sum()
+    backing = Backing(a.backing) if a.backing else None
+    if backing:
+        print(f'backing: {len(backing.songs)} songs', flush=True)
 
     teacher = load_model(a.ckpt)
     for p in teacher.parameters():
         p.requires_grad = False
-    student = load_model(a.ckpt)
+    student = load_model(a.init or a.ckpt)
     if not a.no_channels_last:  # about 25 % faster convolutions on the processor
         teacher = teacher.to(memory_format=torch.channels_last)
         student = student.to(memory_format=torch.channels_last)
@@ -384,10 +467,17 @@ def main():
         step = ck['step']
         rng = np.random.default_rng(1000 + step)
         print('resumed at step', step, flush=True)
-    sets = val_sets(gtechs_dir, a.gs.split(':', 1) if a.gs else None, cabs) if not a.bench else {}
+    sets = val_sets(gtechs_dir, a.gs.split(':', 1) if a.gs else None, cabs, backing) if not a.bench else {}
+    for spec in a.val_extra:
+        name, d = spec.split('=', 1)
+        man = json.load(open(os.path.join(d, 'manifest.json')))
+        sets[name] = [(np.load(os.path.join(d, m['audio'])).astype(np.float32) / 32000, m['notes']) for m in man]
     if step == 0 and sets:
         res = validate(teacher, sets)
         print('val original', res, flush=True)
+        if a.init:
+            res0 = validate(student, sets)
+            print('val start', res0, flush=True)
         with open(os.path.join(a.out, 'log.jsonl'), 'a') as f:
             f.write(json.dumps({'step': 0, 'val': res}) + '\n')
 
@@ -402,17 +492,18 @@ def main():
     t_start = time.time()
     while step < a.steps:
         tb = time.time()
-        clean, proc, gts, gtw, snaps = [], [], [], [], []
+        clean, proc, gts, gtw, kdw, snaps = [], [], [], [], [], []
         for _ in range(a.batch):
             src = sources[rng.choice(len(sources), p=sw)]
-            x, notes = src.sample(rng)
+            x, notes, kd_i, may_rig = src.sample(rng)
             clean.append(x)
-            if src.clean_only or rng.random() < a.clean_p:
-                proc.append(x * (10 ** (rng.uniform(-30, -10) / 20) / (np.sqrt(np.mean(x ** 2)) + 1e-9)))
-            else:
-                proc.append(rig(x, rng, cabs))
+            y = x if (src.clean_only or not may_rig or rng.random() < a.clean_p) else rig(x, rng, cabs)
+            if backing and rng.random() < src.band:
+                y = band_mix(y, backing, rng)
+            proc.append(y * (10 ** (rng.uniform(-30, -10) / 20) / (np.sqrt(np.mean(y ** 2)) + 1e-9)))
             gts.append(notes)
             gtw.append(src.gt_w)
+            kdw.append(kd_i)
             snaps.append(src.snap)
         t_data = time.time() - tb
         with torch.no_grad():
@@ -422,6 +513,7 @@ def main():
         g_off = torch.from_numpy(np.stack([t[1] for t in targets]))
         g_fr = torch.from_numpy(np.stack([t[2] for t in targets]))
         w_gt = torch.tensor(gtw, dtype=torch.float32)
+        w_kd = a.kd * torch.tensor(kdw, dtype=torch.float32)
         train_mode(student)
         for g in opt.param_groups:
             g['lr'] = lr_at(step)
@@ -431,7 +523,7 @@ def main():
         kd = (bce(out[names['onset']], tout[names['onset']]) + bce(out[names['offset']], tout[names['offset']]) +
               bce(out[names['frame']], tout[names['frame']]) + bce(out[names['velocity']], tout[names['velocity']], tout[names['onset']]))
         gt = bce(out[names['onset']], g_on) + bce(out[names['offset']], g_off) + bce(out[names['frame']], g_fr)
-        loss = (a.kd * kd + w_gt * gt).mean()
+        loss = (w_kd * kd + w_gt * gt).mean()
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(params, 3.0)

@@ -17,8 +17,14 @@ of each recording, already shifted to line up with its audio.
   output on this clean acoustic guitar (distillation), so it doesn't drift away from acoustic
   guitar while it learns distortion. No annotations are used.
 
+  Slakh (BabySlakh, https://zenodo.org/records/4603870, CC BY 4.0: songs rendered from MIDI, each
+  instrument a separate stem with its MIDI): the guitar stems with their notes (exact; recorded
+  distorted programs are marked to get no rig on top and no distillation), and the rest of each
+  song as band backing for training (drums, bass, everything else; no guitars).
+
 usage: python tools/hrgt_data.py gtechs <Guitar-TECHS dir> <out dir>
        python tools/hrgt_data.py gs-anchor <GuitarSet annotations.json> <audio dir> <out dir>
+       python tools/hrgt_data.py slakh <babyslakh_16k dir> <guitar out dir> <backing out dir>
 """
 import argparse
 import glob
@@ -148,16 +154,64 @@ def gs_anchor(ann_path, audio_dir, out):
     print('recordings', len(man), 'hours', round(sum(m['dur'] for m in man) / 3600, 2), '(no notes: distillation only)')
 
 
+DISTORTED_PROGRAMS = {29, 30}  # General MIDI: overdriven guitar, distortion guitar
+
+
+def slakh(src, gout, bout, label_delay=0.0):
+    import yaml
+    os.makedirs(gout, exist_ok=True)
+    os.makedirs(bout, exist_ok=True)
+    man = []
+    for track in sorted(glob.glob(os.path.join(src, 'Track*'))):
+        meta = yaml.safe_load(open(os.path.join(track, 'metadata.yaml')))
+        tname = os.path.basename(track)
+        sums = {}
+        for sid, st in sorted(meta['stems'].items()):
+            wav = os.path.join(track, 'stems', sid + '.wav')
+            if not os.path.exists(wav):  # (BabySlakh's audio_rendered flags are all false; the files say what was rendered)
+                continue
+            x = load16k(wav)
+            if st.get('inst_class') == 'Guitar':
+                mid = os.path.join(track, 'MIDI', sid + '.mid')
+                notes = [[round(a + label_delay, 4), round(b + label_delay, 4), p, v] for tr in read_midi(mid) for a, b, p, v in tr['notes'] if 21 <= p <= 108 and b > a] if os.path.exists(mid) else []
+                if len(notes) < 20 or np.abs(x).max() < 1e-4:
+                    continue
+                notes.sort()
+                dist = st.get('program_num') in DISTORTED_PROGRAMS
+                name = f'{tname}_{sid}'
+                np.save(os.path.join(gout, name + '.npy'), np.round(x / (np.abs(x).max() + 1e-9) * 32000).astype(np.int16))
+                man.append({'name': name, 'source': 'slakh', 'group': tname, 'set': 'slakh', 'take': name, 'kind': 'dist' if dist else 'clean',
+                            'program': st.get('program_num'), 'audio': name + '.npy', 'dur': len(x) / SR, 'kd': 0 if dist else 1, 'norig': dist, 'notes': notes})
+                print(f'{name:22s} {st.get("midi_program_name", "?"):24s} {len(x) / SR:6.1f} s notes {len(notes):5d}{"  (recorded distorted)" if dist else ""}', flush=True)
+            else:
+                key = 'drums' if st.get('is_drum') else ('bass' if st.get('inst_class') == 'Bass' else 'other')
+                if key in sums:
+                    n = min(len(sums[key]), len(x))
+                    sums[key] = sums[key][:n] + x[:n]
+                else:
+                    sums[key] = x
+        if sums:
+            os.makedirs(os.path.join(bout, tname), exist_ok=True)
+            for key, x in sums.items():
+                np.save(os.path.join(bout, tname, key + '.npy'), np.round(np.clip(x / (np.abs(x).max() + 1e-9), -1, 1) * 32000).astype(np.int16))
+    json.dump(man, open(os.path.join(gout, 'manifest.json'), 'w'))
+    print('guitar parts', len(man), 'hours', round(sum(m['dur'] for m in man) / 3600, 2), 'notes', sum(len(m['notes']) for m in man),
+          '| backing songs', len(os.listdir(bout)))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('kind', choices=['gtechs', 'gs-anchor'])
+    ap.add_argument('kind', choices=['gtechs', 'gs-anchor', 'slakh'])
     ap.add_argument('src')
     ap.add_argument('rest', nargs='+')
+    ap.add_argument('--label-delay', type=float, default=0.0, help='slakh: seconds to add to the MIDI times')
     a = ap.parse_args()
     if a.kind == 'gtechs':
         gtechs(a.src, a.rest[0])
-    else:
+    elif a.kind == 'gs-anchor':
         gs_anchor(a.src, a.rest[0], a.rest[1])
+    else:
+        slakh(a.src, a.rest[0], a.rest[1], a.label_delay)
 
 
 if __name__ == '__main__':
