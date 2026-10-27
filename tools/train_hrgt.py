@@ -166,12 +166,16 @@ def rig(x, r, cabs, style=None):
     return np.clip(y, -1, 1).astype(np.float32)
 
 
-def separate_sim(g, b, r, gamma=(0.6, 1.8), floor=0.15, jitter=0.35, smooth=(6, 5)):
-    """A guitar isolated from guitar g + backing b (16 kHz) by a simulated imperfect separator:
-    the ideal ratio mask on the mixture's spectrogram raised to a power (harder or softer
-    decisions), smeared over frequency and time, jittered, with a floor that lets some of the
-    band through. Ranges: gamma (lo, hi), floor and jitter up to the given value, smooth up to
-    (freq bins, frames)."""
+def separate_sim(g, b, r, gamma=(0.2, 0.8), bleed=(2.0, 6.0), floor=0.0, jitter=0.02, smooth=(2, 2)):
+    """A guitar isolated from guitar g + backing b (16 kHz) by a simulated imperfect separator.
+    From the ideal ratio mask m of the mixture's spectrogram, smeared over frequency and time and
+    jittered: the guitar comes through by m ** gamma (gamma < 1 keeps more of it than the ideal
+    ratio mask does) and the band leaks through by (m ** gamma) ** bleed, plus a floor (bleed > 1
+    leaks less than the ideal ratio mask). gamma=1, bleed=1 is the ideal ratio mask itself.
+    Ranges: gamma and bleed (lo, hi); floor and jitter up to the given value; smooth up to
+    (freq bins, frames). The defaults cost the note model what BS-RoFormer does on the same mixes
+    (GuitarSet validation takes in MUSDB18 backing: notes found 80.4 both, recall 76.7 vs 75.6,
+    precision 84.5 vs 85.9); the ideal ratio mask costs more (77.9)."""
     from scipy.ndimage import uniform_filter
     from scipy.signal import istft, stft
     n = len(g)
@@ -179,12 +183,12 @@ def separate_sim(g, b, r, gamma=(0.6, 1.8), floor=0.15, jitter=0.35, smooth=(6, 
     _, _, B = stft(b, SR, nperseg=1024, noverlap=768)
     pg, pb = np.abs(G) ** 2, np.abs(B) ** 2
     m = pg / (pg + pb + 1e-10)
-    m = m ** r.uniform(*gamma)
     m = uniform_filter(m, size=(int(r.integers(1, smooth[0] + 1)), int(r.integers(1, smooth[1] + 1))), mode='nearest')
-    m = m * np.exp(r.normal(0, r.uniform(0.02, max(0.03, jitter)), m.shape))
+    m = np.clip(m * np.exp(r.normal(0, r.uniform(0.0, jitter), m.shape)), 0, 1)
+    keep = m ** r.uniform(*gamma)
     fl = r.uniform(0.0, floor)
-    m = np.clip(fl + (1 - fl) * m, 0, 1)
-    _, y = istft(m * (G + B), SR, nperseg=1024, noverlap=768)
+    leak = fl + (1 - fl) * keep ** r.uniform(*bleed)
+    _, y = istft(keep * G + leak * B, SR, nperseg=1024, noverlap=768)
     return y[:n].astype(np.float32) if len(y) >= n else np.pad(y, (0, n - len(y))).astype(np.float32)
 
 
@@ -212,12 +216,13 @@ class Source:
         self.names = [m['name'] for m in man]
         self.kd = [kd * float(m.get('kd', 1)) for m in man]
         self.norig = [bool(m.get('norig', False)) for m in man]
+        self.groups = [m.get('group') for m in man]
         dur = np.array([len(a) for a in self.audio], float)
         self.p = dur / dur.sum()
         self.hours = dur.sum() / SR / 3600
 
     def sample(self, r):
-        """(clip, notes in the clip, kd weight, may go through a rig)"""
+        """(clip, notes in the clip, kd weight, may go through a rig, (song, start) of the clip)"""
         i = r.choice(len(self.audio), p=self.p)
         a = self.audio[i]
         n = self.notes[i]
@@ -234,24 +239,29 @@ class Source:
         t0 = s / SR
         sel = n[(n[:, 1] > t0 - 0.1) & (n[:, 0] < t0 + CLIP / SR + 0.1)].copy()
         sel[:, :2] -= t0
-        return x, sel, self.kd[i], not self.norig[i]
+        return x, sel, self.kd[i], not self.norig[i], (self.groups[i], s)
 
 
 class Backing:
     """Band backing for mixing (tools/hrgt_data.py slakh: per song drums.npy, bass.npy, other.npy,
-    16 kHz; no guitars): a random stretch of a random song, the parts at random levels."""
+    16 kHz; no guitars): a random stretch of a random song, or the stretch of the given song that
+    a part of it plays over (a Slakh guitar part in its own band), the parts at random levels."""
 
     def __init__(self, d):
-        self.songs = []
+        self.songs, self.by_name = [], {}
         for s in sorted(os.listdir(d)):
             parts = [np.load(os.path.join(d, s, f), mmap_mode='r') for f in ('drums.npy', 'bass.npy', 'other.npy') if os.path.exists(os.path.join(d, s, f))]
             if parts:
                 self.songs.append(parts)
+                self.by_name[s] = parts
 
-    def sample(self, r, n=CLIP):
-        parts = self.songs[r.integers(len(self.songs))]
+    def sample(self, r, n=CLIP, song=None, start=None):
+        parts = self.by_name.get(song)
+        if parts is None or start is None:
+            parts = self.songs[r.integers(len(self.songs))]
+            start = None
         L = min(len(p) for p in parts)
-        s = int(r.integers(0, max(1, L - n)))
+        s = int(r.integers(0, max(1, L - n))) if start is None else start
         y = np.zeros(n, np.float32)
         for p in parts:
             if r.random() < 0.85:  # now and then a part sits out
@@ -260,9 +270,10 @@ class Backing:
         return y
 
 
-def band_mix(g, backing, r):
-    """The (processed) guitar g in a band, isolated again by the simulated separator."""
-    b = backing.sample(r, len(g))
+def band_mix(g, backing, r, song=None, start=None):
+    """The (processed) guitar g in a band (song, start: its own, when backing has it), isolated
+    again by the simulated separator."""
+    b = backing.sample(r, len(g), song, start)
     gr, br = np.sqrt(np.mean(g ** 2)) + 1e-9, np.sqrt(np.mean(b ** 2)) + 1e-9
     if br < 1e-5:
         return g
@@ -495,11 +506,11 @@ def main():
         clean, proc, gts, gtw, kdw, snaps = [], [], [], [], [], []
         for _ in range(a.batch):
             src = sources[rng.choice(len(sources), p=sw)]
-            x, notes, kd_i, may_rig = src.sample(rng)
+            x, notes, kd_i, may_rig, own = src.sample(rng)
             clean.append(x)
             y = x if (src.clean_only or not may_rig or rng.random() < a.clean_p) else rig(x, rng, cabs)
             if backing and rng.random() < src.band:
-                y = band_mix(y, backing, rng)
+                y = band_mix(y, backing, rng, *(own if rng.random() < 0.8 else (None, None)))
             proc.append(y * (10 ** (rng.uniform(-30, -10) / 20) / (np.sqrt(np.mean(y ** 2)) + 1e-9)))
             gts.append(notes)
             gtw.append(src.gt_w)
