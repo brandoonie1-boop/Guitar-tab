@@ -385,6 +385,32 @@ def val_sets(gtechs_dir, gs, cabs, backing=None):
     return sets
 
 
+def load_cabs(path):
+    """Cabinet impulse responses (48 kHz) at unit energy: the app's packed assets/sound-cabs-*.bin,
+    or a folder of .wav files."""
+    cabs = []
+    if path and os.path.isfile(path):
+        import io
+        import struct
+        b = open(path, 'rb').read()
+        n = struct.unpack('<I', b[4:8])[0]
+        for at, ln in json.loads(b[8:8 + n]).values():
+            ir, sr = sf.read(io.BytesIO(b[8 + n + at:8 + n + at + ln]), dtype='float64')
+            cabs.append(ir / np.sqrt(np.sum(ir ** 2)))
+    elif path:
+        for f in sorted(os.listdir(path)):
+            if f.endswith('.wav'):
+                ir, sr = sf.read(os.path.join(path, f), dtype='float64')
+                cabs.append(ir / np.sqrt(np.sum(ir ** 2)))
+    return cabs
+
+
+def manifest_set(d):
+    """A validation set from a manifest (e.g. tools/synth_riffs.py parts)."""
+    man = json.load(open(os.path.join(d, 'manifest.json')))
+    return [(np.load(os.path.join(d, m['audio'])).astype(np.float32) / 32000, m['notes']) for m in man]
+
+
 def validate(net, sets):
     net.eval()
     res = {}
@@ -422,20 +448,7 @@ def main():
     torch.set_num_threads(a.threads)
     os.makedirs(a.out, exist_ok=True)
 
-    cabs = []
-    if a.cabs and os.path.isfile(a.cabs):  # the app's packed cabinet responses (assets/sound-cabs-*.bin)
-        import io
-        import struct
-        b = open(a.cabs, 'rb').read()
-        n = struct.unpack('<I', b[4:8])[0]
-        for at, ln in json.loads(b[8:8 + n]).values():
-            ir, sr = sf.read(io.BytesIO(b[8 + n + at:8 + n + at + ln]), dtype='float64')
-            cabs.append(ir / np.sqrt(np.sum(ir ** 2)))
-    elif a.cabs:
-        for f in sorted(os.listdir(a.cabs)):
-            if f.endswith('.wav'):
-                ir, sr = sf.read(os.path.join(a.cabs, f), dtype='float64')
-                cabs.append(ir / np.sqrt(np.sum(ir ** 2)))
+    cabs = load_cabs(a.cabs)
     sources = []
     gtechs_dir = None
     for spec in a.data:
@@ -481,8 +494,7 @@ def main():
     sets = val_sets(gtechs_dir, a.gs.split(':', 1) if a.gs else None, cabs, backing) if not a.bench else {}
     for spec in a.val_extra:
         name, d = spec.split('=', 1)
-        man = json.load(open(os.path.join(d, 'manifest.json')))
-        sets[name] = [(np.load(os.path.join(d, m['audio'])).astype(np.float32) / 32000, m['notes']) for m in man]
+        sets[name] = manifest_set(d)
     if step == 0 and sets:
         res = validate(teacher, sets)
         print('val original', res, flush=True)
