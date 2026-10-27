@@ -155,9 +155,15 @@ def gs_anchor(ann_path, audio_dir, out):
 
 
 DISTORTED_PROGRAMS = {29, 30}  # General MIDI: overdriven guitar, distortion guitar
+# The rendered notes sound later than their MIDI note-on (the instrument patches' attacks): where
+# the original note model hears the onsets on clean BabySlakh guitar parts, median per program
+# (nylon 12.5 ms, steel 9-25, jazz 28-34, clean 33-36, muted 47); the distorted patches get the
+# electric figure.
+PROGRAM_DELAY = {24: 0.0125, 25: 0.017, 26: 0.031, 27: 0.034, 28: 0.04}
+DEFAULT_DELAY = 0.033
 
 
-def slakh(src, gout, bout, label_delay=0.0):
+def slakh(src, gout, bout, label_delay=None):
     import yaml
     os.makedirs(gout, exist_ok=True)
     os.makedirs(bout, exist_ok=True)
@@ -173,7 +179,8 @@ def slakh(src, gout, bout, label_delay=0.0):
             x = load16k(wav)
             if st.get('inst_class') == 'Guitar':
                 mid = os.path.join(track, 'MIDI', sid + '.mid')
-                notes = [[round(a + label_delay, 4), round(b + label_delay, 4), p, v] for tr in read_midi(mid) for a, b, p, v in tr['notes'] if 21 <= p <= 108 and b > a] if os.path.exists(mid) else []
+                dl = label_delay if label_delay is not None else PROGRAM_DELAY.get(st.get('program_num'), DEFAULT_DELAY)
+                notes = [[round(a + dl, 4), round(b + dl, 4), p, v] for tr in read_midi(mid) for a, b, p, v in tr['notes'] if 21 <= p <= 108 and b > a] if os.path.exists(mid) else []
                 if len(notes) < 20 or np.abs(x).max() < 1e-4:
                     continue
                 notes.sort()
@@ -204,7 +211,7 @@ def main():
     ap.add_argument('kind', choices=['gtechs', 'gs-anchor', 'slakh'])
     ap.add_argument('src')
     ap.add_argument('rest', nargs='+')
-    ap.add_argument('--label-delay', type=float, default=0.0, help='slakh: seconds to add to the MIDI times')
+    ap.add_argument('--label-delay', type=float, default=None, help='slakh: seconds to add to the MIDI times (default: per program, PROGRAM_DELAY)')
     a = ap.parse_args()
     if a.kind == 'gtechs':
         gtechs(a.src, a.rest[0])
