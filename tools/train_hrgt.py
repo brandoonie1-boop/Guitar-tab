@@ -166,12 +166,12 @@ def rig(x, r, cabs, style=None):
     return np.clip(y, -1, 1).astype(np.float32)
 
 
-def separate_sim(g, b, r):
+def separate_sim(g, b, r, gamma=(0.6, 1.8), floor=0.15, jitter=0.35, smooth=(6, 5)):
     """A guitar isolated from guitar g + backing b (16 kHz) by a simulated imperfect separator:
-    the ideal ratio mask on the mixture's spectrogram, sharpened or softened, smeared over time
-    and frequency, with a floor that lets some of the band through and random jitter (a mask
-    estimator like BS-RoFormer errs in these ways: bleed where the band is loud, a thinned guitar
-    under it, softened attacks)."""
+    the ideal ratio mask on the mixture's spectrogram raised to a power (harder or softer
+    decisions), smeared over frequency and time, jittered, with a floor that lets some of the
+    band through. Ranges: gamma (lo, hi), floor and jitter up to the given value, smooth up to
+    (freq bins, frames)."""
     from scipy.ndimage import uniform_filter
     from scipy.signal import istft, stft
     n = len(g)
@@ -179,11 +179,11 @@ def separate_sim(g, b, r):
     _, _, B = stft(b, SR, nperseg=1024, noverlap=768)
     pg, pb = np.abs(G) ** 2, np.abs(B) ** 2
     m = pg / (pg + pb + 1e-10)
-    m = m ** r.uniform(0.6, 1.8)  # softer or harder decisions
-    m = uniform_filter(m, size=(int(r.integers(1, 6)), int(r.integers(1, 5))), mode='nearest')  # smeared (freq, time)
-    m = m * np.exp(r.normal(0, r.uniform(0.05, 0.35), m.shape))  # jitter
-    floor = r.uniform(0.0, 0.15)  # the band leaking through (up to about -16 dB)
-    m = np.clip(floor + (1 - floor) * m, 0, 1)
+    m = m ** r.uniform(*gamma)
+    m = uniform_filter(m, size=(int(r.integers(1, smooth[0] + 1)), int(r.integers(1, smooth[1] + 1))), mode='nearest')
+    m = m * np.exp(r.normal(0, r.uniform(0.02, max(0.03, jitter)), m.shape))
+    fl = r.uniform(0.0, floor)
+    m = np.clip(fl + (1 - fl) * m, 0, 1)
     _, y = istft(m * (G + B), SR, nperseg=1024, noverlap=768)
     return y[:n].astype(np.float32) if len(y) >= n else np.pad(y, (0, n - len(y))).astype(np.float32)
 
