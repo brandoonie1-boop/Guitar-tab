@@ -88,8 +88,10 @@ async function isolate(name, i) {
   for (let k = 0; k < n; k++) { L[k] = bL[k] + gb * g[k]; R[k] = bR[k] + gb * g[k]; pk = Math.max(pk, Math.abs(L[k]), Math.abs(R[k])); }
   if (pk > 0.98) for (let k = 0; k < n; k++) { L[k] *= 0.98 / pk; R[k] *= 0.98 / pk; }
   if (!session) {
-    // memory arenas on: faster here (the app turns them off to save a phone's memory)
-    session = await loadBsrChain(ort, new Uint8Array(fs.readFileSync(bsrPath)), { intraOpNumThreads: Number(process.env.THREADS || 4) });
+    // memory arenas on: faster here (the app turns them off to save a phone's memory); ARENA=0
+    // turns them off too (under 1 GB instead of about 13, e.g. next to a training run)
+    const lowMem = process.env.ARENA === '0' ? { enableCpuMemArena: false, enableMemPattern: false } : {};
+    session = await loadBsrChain(ort, new Uint8Array(fs.readFileSync(bsrPath)), { intraOpNumThreads: Number(process.env.THREADS || 4), ...lowMem });
     session.stems = ['guitar'];
   }
   const t = Date.now();
