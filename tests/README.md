@@ -55,6 +55,29 @@ node tests/eval_strings.mjs egset egset.json egset_amp20 models/acts/egset_amp20
 
 Training validates on takes the tests don't use (Guitar-TECHS P3, which training leaves out, and 8 GuitarSet takes outside `--every 3`), and the stages, the checkpoints and the blend share were chosen on those; EGSet12 is never used for training or choosing. Why the stages: on electric data alone, clean acoustic guitar slipped (validation 84.9 -> 82.9 after 200 steps) while distortion improved fast; the anchor of clean acoustic recordings (distillation only) at weight 0.6 brought it back to 83.8 and the 70/30 blend to 84.7.
 
+Second round (a guitar in a band, pickups, Slakh guitar parts), from the weights above:
+
+```
+python tools/hrgt_data.py slakh babyslakh_16k nd/slakh_gtr nd/backing          # BabySlakh (https://zenodo.org/records/4603870): its guitar parts with their MIDI, and the rest of each song as backing
+python tools/synth_riffs.py gt_notes nd/synth2 --minutes 200 --seed 2 --pickup any                # riffs through bridge, middle and neck pickups
+python tools/synth_riffs.py gt_notes val/synth_bridge --minutes 10 --seed 99 --pickup bridge     # validation only
+C="--cabs assets/sound-cabs-<sha>.0.bin --gs gs.json:GuitarSet/audio --backing nd/backing --val-extra synth_bridge=val/synth_bridge"
+python tools/train_hrgt.py guitar-fl.pth runs/r3 --init hrgt_ft.pt $C --batch 2 --steps 1000 --lr 3e-5 --val-every 200 \
+  --data nd/gtechs,w=0.45,gt=0.25,snap=1,band=0.4 --data nd/synth2,w=0.35,gt=1,band=0.4,kd=0.3 \
+  --data nd/slakh_gtr,w=0.3,gt=1,snap=1,band=0.7 --data nd/gs_anchor,w=0.45,gt=0,clean=1,band=0.4
+python tools/blend_hrgt.py average runs/r3/step_800.pt runs/r3/step_1000.pt hrgt_r3.pt         # then export and pack as above
+```
+
+`band=` is the share of a source's clips that are mixed into a band (another song's drums, bass and other instruments, or a Slakh part's own song, in time) and taken out again by a simulated separator. The simulator was set so that it costs the note model what BS-RoFormer itself does on the same mixes (GuitarSet validation takes in MUSDB18 backing: notes found 80.4 after either, 83.8 clean); the ideal ratio mask costs more (77.9), the first setting much more (68.0). The checkpoint and the new onset threshold (0.3) were chosen on validation sets only: the trainer's (Guitar-TECHS P3 and 8 GuitarSet takes, clean, heavy distortion, in a simulated band; synthetic bridge-pickup parts) plus the same with heavy distortion in a band, and the GuitarSet validation takes isolated from MUSDB18 backing by the real BS-RoFormer.
+
+Band test bench: the test takes mixed into real drums, bass and vocals from MUSDB18's test songs (the guitar 3-9 dB under the band; each take always gets the same song, place and level) and isolated by the app's BS-RoFormer cut, run through the app's separation code (the isolated guitars are cached, so comparing note models only reruns the note model):
+
+```
+node tools/cut_bsr.mjs bs_roformer_sw_6stem_fp16.onnx bsr_guitar.bin guitar     # the cut the app makes on the device
+node tests/eval_band.mjs models gs.json GuitarSet/audio musdb18_test bsr_guitar.bin --suffix _mic --every 12 --limit 16
+node tests/eval_band.mjs models egset.json EGSet12 musdb18_test bsr_guitar.bin [--fx amp:20]
+```
+
 | Script | What it checks |
 |---|---|
 | `test_demucs.mjs` | JS STFT/iSTFT + ONNX Demucs vs. the PyTorch reference (should be ~80 dB SNR) |
@@ -65,6 +88,7 @@ Training validates on takes the tests don't use (Guitar-TECHS P3, which training
 | `test_hrgt.mjs` | guitar transcription model: JS log-mel, ONNX parts and note decoding vs. PyTorch (reference from `tools/make_hrgt_ref.py`) |
 | `eval_hrgt_gs.mjs` | note accuracy of the guitar transcription model on GuitarSet, through the app's JS code |
 | `eval_notes.mjs` | notes found by the note model on any annotated set (GuitarSet, EGSet12), clean or through a simulated amp (`--fx tanh:G`, `--fx amp:G`), through the app's JS code; caches the model outputs per take |
+| `eval_band.mjs` | notes found in a band: the test takes mixed into MUSDB18 drums, bass and vocals and isolated again by BS-RoFormer through the app's separation code (`--fx` as above); caches the isolated guitars |
 | `analyze_note_errors.mjs` | note errors by kind (missed re-attacks, octave/harmonic ghosts, ...) for basic-pitch or (`--hr`) the transcription model |
 | `test_basicpitch.mjs` | JS basic-pitch runner + note decoding vs. the Python package (identical notes) |
 | `test_fretboard.mjs`, `synthetic_cases.mjs` | tuning/capo detection and fingering on synthetic tabs (DAEABE capo 7, FACGCE, open D, drop D, capo 2/3, ...) |

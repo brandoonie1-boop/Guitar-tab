@@ -18,7 +18,8 @@
 | [GuitarSet](https://guitarset.weebly.com/) (Xi, Bittner, et al.) | also training data for the string classifier (`engine/strings-model.js` holds weights learned from it) and evaluation; recordings of the takes the tests don't use (not their annotations) keep the note model's fine-tuning close to the original on acoustic guitar | CC BY 4.0 |
 | [Guitar-TECHS](https://zenodo.org/records/14963133) | also training data for the string classifier and for the note model's fine-tuning: its direct-input and amp recordings with their MIDI, and synthetic parts played with its recorded notes (`tools/synth_riffs.py`); weights only | CC BY 4.0 |
 | [EGSet12](https://zenodo.org/records/11406378) | evaluation only, not included | CC BY 4.0 |
-| [MUSDB18](https://sigsep.github.io/datasets/musdb.html) / [MUSDB25](https://huggingface.co/datasets/kwatcharasupat/musdb25), [Slakh2100](http://www.slakh.com/) | evaluation only (band mixes for the accuracy tests), not included | research / non-commercial use; CC BY 4.0 |
+| [MUSDB18](https://sigsep.github.io/datasets/musdb.html) / [MUSDB25](https://huggingface.co/datasets/kwatcharasupat/musdb25) | evaluation only (band mixes for the accuracy tests), not included | research / non-commercial use |
+| [Slakh2100](http://www.slakh.com/) (Manilow, Wichern, Seetharaman, Le Roux: "Cutting Music Source Separation Some Slakh", WASPAA 2019) | evaluation (its test songs); its [BabySlakh](https://zenodo.org/records/4603870) subset is also training data for the note model's second round of tuning: the guitar parts with their MIDI, and the rest of each song as a band to mix guitars into; weights only | CC BY 4.0 |
 
 An unmodified copy of the alphaTab license file is in `vendor/alphatab/`.
 

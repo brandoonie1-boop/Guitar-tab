@@ -1,5 +1,5 @@
 {
- "version": "bc816f156b",
+ "version": "8aefcadbd1",
  "ort": {
   "wasm": "vendor/ort/ort.wasm.bundle.min.mjs",
   "webgpu": "vendor/ort/ort.webgpu.bundle.min.mjs"
@@ -54,18 +54,18 @@
   },
   "hrgtWeights": {
    "size": 40437248,
-   "sha": "157de5bb7d",
+   "sha": "fb3c2733e3",
    "parts": [
-    "assets/hrgt-weights-157de5bb7d.0.bin",
-    "assets/hrgt-weights-157de5bb7d.1.bin",
-    "assets/hrgt-weights-157de5bb7d.2.bin"
+    "assets/hrgt-weights-fb3c2733e3.0.bin",
+    "assets/hrgt-weights-fb3c2733e3.1.bin",
+    "assets/hrgt-weights-fb3c2733e3.2.bin"
    ]
   },
   "hrgtChain": {
-   "size": 76794,
-   "sha": "e013e67229",
+   "size": 76799,
+   "sha": "8d58044141",
    "parts": [
-    "assets/hrgt-chain-e013e67229.0.bin"
+    "assets/hrgt-chain-8d58044141.0.bin"
    ]
   },
   "beatModel": {
