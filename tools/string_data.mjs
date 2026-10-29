@@ -10,6 +10,9 @@
 //     node tools/string_data.mjs gtechs <dataset dir> <out> [--kind micamp|directinput] [--copies 2] [--augment n] [--groups P1,P2]
 //   EGSet12 (electric, test only; https://zenodo.org/records/11406378):
 //     node tools/string_data.mjs egset <annotations.json> <audio dir> <out>
+//   EGDB (electric through a hexaphonic pickup, as recorded and through amps; labels from
+//   tools/egdb_json.py, split by clip) the same way, under its own group name:
+//     node tools/string_data.mjs egset egdb_train.json EGDB/audio_DI <out> --copies 2 --group EGDB
 //
 // --copies n: n passes per take, every pass after the first with jittered note onsets (as the
 // note detector's are). --augment n: n more passes through random tone changes (EQ, amp-style
@@ -217,7 +220,7 @@ if (cmd === 'guitarset' || cmd === 'egset') {
   const version = opt('--version', 'mic');
   const takes = Object.keys(ann).sort().map((name) => ({
     name,
-    group: cmd === 'egset' ? 'EG' : name.slice(0, 2),
+    group: cmd === 'egset' ? opt('--group', 'EG') : name.slice(0, 2),
     audio: () => loadMono44(path.join(audioDir, cmd === 'egset' ? `${name}.wav` : `${name}_${version}.wav`)),
     notes: ann[name].notes.map(([t, d, v, s]) => ({ t0: t, t1: t + d, pitch: Math.round(v), string: s })),
   }));

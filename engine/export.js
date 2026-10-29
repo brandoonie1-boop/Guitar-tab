@@ -24,7 +24,10 @@ function noteTex(n, tie, techMap) {
     if (t.legato) eff.push('h');
     if (t.slide) eff.push('sl');
     if (t.bend) eff.push(`b (0 ${Math.max(1, Math.round(t.bend * 2))})`);
+    else if (t.release) eff.push(`b (${Math.max(1, Math.round(t.release * 2))} 0)`); // bent before the pick, let down
     if (t.vibrato) eff.push('v');
+    if (t.palmMute) eff.push('pm');
+    if (t.harmonic) eff.push(t.harmonic === 'pinch' ? 'ph' : t.harmonic === 'artificial' ? 'ah' : 'nh');
   }
   if (n.ghost) eff.push('g');
   return `${n.fret}.${s}${eff.length ? '{' + eff.join(' ') + '}' : ''}`;
@@ -137,8 +140,8 @@ export function toAscii(doc, opts = {}) {
           if (!seg.notes || seg.tie) continue;
           for (const n of seg.notes) {
             const t = techMap.get(n.id);
-            let txt = String(n.fret);
-            if (t && t.bend) txt += 'b';
+            let txt = t && t.harmonic ? `<${n.fret}>` : String(n.fret);
+            if (t && (t.bend || t.release)) txt += t.release && !t.bend ? 'r' : 'b';
             if (t && t.vibrato) txt += '~';
             if (t && t.legato) txt += t.legatoUp === false ? 'p' : 'h';
             if (t && t.slide) txt += t.slideUp === false ? '\\' : '/';

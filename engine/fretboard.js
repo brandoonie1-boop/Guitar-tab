@@ -35,6 +35,14 @@ export const FINGER_COSTS = {
   // EGSet12: tests/eval_strings.mjs)
   audio: 0.1,
   audioCap: 10,
+  // how a note began (engine/techniques.js attachOnsetEvidence): a hammer-on, pull-off or slide
+  // can only come from the note sounding on its own string; placing one elsewhere costs this
+  // much times its probability
+  legato: 3,
+  // in a single-note line the same pitch again within this many seconds of the last one is
+  // played on the same string (tremolo picking, repeated notes); another string costs this much
+  repeat: 1.5,
+  repeatGap: 0.3,
 };
 
 // Setup detection fingers the notes with the same profile (plus a slight tie-break toward
@@ -186,24 +194,41 @@ export function assignFingering(notes, events, setup, opts = {}) {
   const maxAssign = opts.maxAssign ?? 40;
   const ringTol = 0.05;
   const evRange = opts.eventRange || [0, events.length];
-  let beam = [{ cost: 0, ringEnd: new Float64Array(NSTR).fill(-1), ringFret: new Int8Array(NSTR), ringW: new Float32Array(NSTR), hand: -1, lastT: -10, parent: null, place: null, ev: -1 }];
+  let beam = [{ cost: 0, ringEnd: new Float64Array(NSTR).fill(-1), ringFret: new Int8Array(NSTR), ringW: new Float32Array(NSTR), last: new Int32Array(NSTR).fill(-1), hand: -1, lastT: -10, parent: null, place: null, ev: -1 }];
+  // the note each one may have been hammered, pulled or slid from, and how likely that is
+  const index = new Map(notes.map((n, i) => [n.id, i]));
+  const from = notes.map((n) => (n.how && n.from != null && index.has(n.from) ? index.get(n.from) : -1));
+  const pLegato = notes.map((n) => (n.how ? (n.how.legato || 0) + (n.how.slide || 0) : 0));
+  // notes played on their own (not in a chord)
+  const alone = new Uint8Array(notes.length);
+  for (const e of events) if (e.notes.length === 1) alone[e.notes[0]] = 1;
   // Every (state, assignment) pair is scored in scratch buffers; only the states that make it
   // into the next beam get arrays of their own (JavaScriptCore in particular is slow to
   // collect millions of short-lived typed arrays, which made memory spike on iPhones).
-  const sEnd = new Float64Array(NSTR), sFret = new Int8Array(NSTR), sW = new Float32Array(NSTR), sNew = new Uint8Array(NSTR);
+  const sEnd = new Float64Array(NSTR), sFret = new Int8Array(NSTR), sW = new Float32Array(NSTR), sNew = new Uint8Array(NSTR), sLast = new Int32Array(NSTR);
   let cap = 0, cCost = null, cKey = null, cSt = null, cA = null;
   // advance state st by assignment a of event ev into the scratch buffers; returns the cost
   const advance = (st, a, ev) => {
     const dt = Math.max(0, ev.t - st.lastT);
     const speed = Math.min(2.5, Math.max(0.1, 0.3 / (dt + 0.05)));
     let c = st.cost + a.cost;
-    sEnd.set(st.ringEnd); sFret.set(st.ringFret); sW.set(st.ringW); sNew.fill(0);
+    sEnd.set(st.ringEnd); sFret.set(st.ringFret); sW.set(st.ringW); sNew.fill(0); sLast.set(st.last);
     for (let s = 0; s < NSTR; s++) if (sEnd[s] >= 0 && sEnd[s] <= ev.t + ringTol) sEnd[s] = -1;
     for (let j = 0; j < a.place.length; j++) {
       const p = a.place[j];
       if (!p) continue;
       if (sEnd[p.s] >= 0) c += costs.cut * Math.min(1, (sEnd[p.s] - ev.t) / costs.cutTime) * sW[p.s];
-      const n = notes[ev.notes[j]];
+      const ni = ev.notes[j], n = notes[ni];
+      // a hammer-on, pull-off or slide stays on the string of the note it came from
+      if (from[ni] >= 0 && pLegato[ni] > 0 && st.last[p.s] !== from[ni]) c += costs.legato * pLegato[ni];
+      // a repeated note in a line stays on its string
+      if (alone[ni]) {
+        for (let s = 0; s < NSTR; s++) {
+          const q = st.last[s];
+          if (s !== p.s && q >= 0 && alone[q] && notes[q].pitch === n.pitch && notes[q].t1 >= ev.t - costs.repeatGap) { c += costs.repeat; break; }
+        }
+      }
+      sLast[p.s] = ni;
       sEnd[p.s] = n.t1;
       sFret[p.s] = p.f;
       sW[p.s] = 0.5 + 0.5 * Math.min(1, (n.amp ?? 0.4) / 0.4);
@@ -256,7 +281,7 @@ export function assignFingering(notes, events, setup, opts = {}) {
       const j = order[i];
       const st = beam[cSt[j]], a = assigns[cA[j]];
       const c = advance(st, a, ev);
-      next.push({ cost: c, ringEnd: Float64Array.from(sEnd), ringFret: Int8Array.from(sFret), ringW: Float32Array.from(sW), hand: advance.hand, lastT: ev.t, parent: opts.costOnly ? null : st, place: a.place, ev: ei });
+      next.push({ cost: c, ringEnd: Float64Array.from(sEnd), ringFret: Int8Array.from(sFret), ringW: Float32Array.from(sW), last: Int32Array.from(sLast), hand: advance.hand, lastT: ev.t, parent: opts.costOnly ? null : st, place: a.place, ev: ei });
     }
     beam = next;
   }

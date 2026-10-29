@@ -14,6 +14,8 @@
 // --detect also works out tuning and capo (otherwise standard tuning, no capo, is given).
 // --direct skips learning the guitar's strings from the recording (stiffnessEvidence).
 // --true-notes fingers the annotated notes instead of detected ones.
+// --onsets <onset.json | default> hears how each note began (engine/techniques.js), which keeps
+// hammer-ons, pull-offs and slides on one string.
 import fs from 'node:fs';
 import path from 'node:path';
 import { decodeWav } from '../engine/wav.js';
@@ -23,11 +25,14 @@ import { cleanNotes } from '../engine/notes.js';
 import { rankSetups, assignFingering, buildEvents } from '../engine/fretboard.js';
 import { stringModel, attachStringEvidence, placeLogProbs, defaultStringModel } from '../engine/strings.js';
 import { applySetup, notesForTuning, DEFAULT_OPTS } from '../engine/pipeline.js';
+import { attachOnsetEvidence, onsetNet, defaultOnsetNet } from '../engine/techniques.js';
 
 const STD = [40, 45, 50, 55, 59, 64];
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
-const pos = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1] === '--every'));
+const pos = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && ['--every', '--onsets'].includes(args[i - 1])));
+const onsetArg = opt('--onsets');
+const oNet = !onsetArg ? null : onsetArg === 'default' ? defaultOnsetNet() : onsetNet(JSON.parse(fs.readFileSync(onsetArg, 'utf8')));
 const [kind, annPath, audioDir, actDir, modelArg] = pos;
 const every = Number(opt('--every', 1));
 const ann = JSON.parse(fs.readFileSync(annPath, 'utf8'));
@@ -73,14 +78,16 @@ let TP = 0, NE = 0, NR = 0, strOk = 0, tabOk = 0, setupOk = 0;
 for (const name of names) {
   const model = modelFor(name);
   // --true-notes: finger the annotated notes themselves (the string choice on its own)
-  const notes = args.includes('--true-notes')
+  let notes = args.includes('--true-notes')
     ? ann[name].notes.map(([t, d, v], i) => ({ id: 'x:' + i, t0: t, t1: t + d, pitch: Math.round(v), amp: 0.5 }))
     : cleanNotes(hrNotes(activations(name), { onsetThreshold: DEFAULT_OPTS.hrOnset, offsetThreshold: DEFAULT_OPTS.hrOffset, frameThreshold: DEFAULT_OPTS.hrFrame })
       .map((n) => ({ ...n, bends: [], hr: true, conf: n.onsetProb, onsetProb: 0.5, support: 1 })), { idPrefix: 'x:', mergeFragments: false, mergeRetrigger: false });
-  if (model) {
+  if (model || oNet) {
     const w = decodeWav(fs.readFileSync(path.join(audioDir, kind === 'guitarset' ? `${name}_mic.wav` : `${name}.wav`)));
     const mono = w.channels.length > 1 ? Float32Array.from(w.channels[0], (v, i) => 0.5 * (v + w.channels[1][i])) : w.channels[0];
-    attachStringEvidence(notes, w.sr === 44100 ? mono : resample(mono, w.sr, 44100), 0, model);
+    const x = w.sr === 44100 ? mono : resample(mono, w.sr, 44100);
+    if (model) attachStringEvidence(notes, x, 0, model);
+    if (oNet) notes = attachOnsetEvidence(notes, x, 44100, 0, oNet);
   }
   const setup = args.includes('--detect') ? rankSetups([notesForTuning(notes)], { stringModel: model }).ranked[0].setup : { tuning: STD, capo: 0 };
   if (args.includes('--direct')) {

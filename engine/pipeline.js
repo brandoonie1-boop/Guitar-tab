@@ -11,7 +11,7 @@ import { splitStereo, chooseParts } from './stereo.js';
 import { cleanNotes } from './notes.js';
 import { rankSetups, assignFingering, buildEvents } from './fretboard.js';
 import { attachStringEvidence, defaultStringModel, placeLogProbs, stiffnessEvidence } from './strings.js';
-import { detectTechniques } from './techniques.js';
+import { detectTechniques, attachOnsetEvidence, attachTechEvidence } from './techniques.js';
 import { quantize, extendBeats, beatPos } from './rhythm.js';
 import { toAlphaTex, toAscii } from './export.js';
 import { tuningName } from './tunings.js';
@@ -64,12 +64,20 @@ function makeProgress(cb) {
  * Notes of a mono 44.1 kHz guitar signal, correcting the tuning offset first.
  * With the guitar transcription model (env.getTranscriber) its notes are used, and
  * basic-pitch only supplies the pitch-bend tracks and attack strengths that the technique
- * detection reads; without it basic-pitch finds the notes too.
+ * detection reads; without it basic-pitch finds the notes too. opts.hrOnly: the transcription
+ * model's notes alone (no pitch-bend tracks; for training data).
  */
 export async function detectNotes(env, mono44, opts, cents, onProgress) {
-  const session = await env.getBasicPitch();
   // shift pitch so the instrument lines up with A440: play it r times faster
   const r = Math.abs(cents) >= 12 ? Math.pow(2, -cents / 1200) : 1;
+  if (opts.hrOnly) {
+    const hr = await env.getTranscriber();
+    const x16 = resample(mono44, DEMUCS.sr * r, HR.sr, 64, 0.958);
+    const act = await hrActivations(env.ort, hr, x16, { hop: opts.hrHop, chunk: hr.onGpu ? 500 : 250, onProgress, shouldCancel: env.cancelled });
+    return hrNotes(act, { onsetThreshold: opts.hrOnset, offsetThreshold: opts.hrOffset, frameThreshold: opts.hrFrame })
+      .map((n) => ({ t0: n.t0 * r, t1: n.t1 * r, pitch: n.pitch, amp: n.amp, velocity: n.velocity, bends: [], hr: true, conf: n.onsetProb, support: 1 }));
+  }
+  const session = await env.getBasicPitch();
   let hr = null;
   if (opts.notesModel !== 'basic' && env.getTranscriber) {
     try {
@@ -344,10 +352,16 @@ export async function analyzeStage(stems, userOpts = {}, env) {
     const raw = await detectNotes(env, pd.audio, opts, cents, (f) => progress('notes', (pi + f) / partDefs.length, `Hearing the notes${partDefs.length > 1 ? ` (${pd.name})` : ''}`));
     // the transcription model hears re-attacks itself; basic-pitch's need the re-trigger check
     const hrNotesFound = raw.length > 0 && raw[0].hr;
-    const notes = cleanNotes(raw, { idPrefix: pd.id + ':', mergeFragments: !hrNotesFound, mergeRetrigger: hrNotesFound ? false : opts.mergeRetrigger, retriggerRatio: opts.retriggerRatio, retriggerAbs: opts.retriggerAbs });
+    let notes = cleanNotes(raw, { idPrefix: pd.id + ':', mergeFragments: !hrNotesFound, mergeRetrigger: hrNotesFound ? false : opts.mergeRetrigger, retriggerRatio: opts.retriggerRatio, retriggerAbs: opts.retriggerAbs });
     if (!notes.length || (notes.length < 3 && partDefs.length > 1)) continue;
     // how each note sounds tells which string it was played on (kept on the notes, n.sv)
     if (sModel) attachStringEvidence(notes, pd.audio, cents, sModel);
+    // how each note began (picked, or hammered on, pulled off or slid into: the fingering keeps
+    // those on one string) and how it sounds (bent, shaken, palm-muted, a harmonic), for the marks
+    if (opts.techniques !== false) {
+      notes = attachOnsetEvidence(notes, pd.audio, sr, cents);
+      attachTechEvidence(notes, pd.audio, sr, cents);
+    }
     // a single part's audio is the guitar stem itself; only split parts keep theirs (for playback)
     parts.push({ id: pd.id, name: pd.name, audio: partDefs.length > 1 ? pd.audio : null, notes });
   }
