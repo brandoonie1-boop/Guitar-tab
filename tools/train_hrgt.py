@@ -22,7 +22,10 @@ convolutions; BatchNorm statistics stay as trained.
 usage: python tools/train_hrgt.py <guitar-fl.pth> <out dir> --data <dir>:<weight>:<label weight>:<snap 0|1>[:<always clean>] ...
          --cabs assets/sound-cabs-<sha>.0.bin --gs <GuitarSet annotations.json>:<audio dir>
          [--steps 3000] [--batch 4] [--lr 1e-4] [--val-every 300] [--threads 4] [--bench]
+         [--device cuda] [--workers 4] [--val-egdb <EGDB manifest dir>]
 Writes <out dir>/last.pt (resumable), step_<n>.pt at each validation, log.jsonl.
+On a graphics card (--device cuda, the default when there is one) the clips are made by --workers
+processes while the card trains.
 """
 import argparse
 import json
@@ -206,12 +209,15 @@ def tanh_amp(x, g, sr=SR):
 class Source:
     """Recordings of one manifest (tools/hrgt_data.py, tools/synth_riffs.py). Per recording, a
     manifest entry can say kd: 0 (no distillation: the original model can't hear it clean, e.g. a
-    guitar recorded distorted) and norig: true (already through an amp: no rig on top)."""
+    guitar recorded distorted) and norig: true (already through an amp: no rig on top), and
+    clean_audio: the same performance recorded clean (EGDB's direct input under an amp take),
+    which the original model then hears instead for distillation."""
 
     def __init__(self, d, weight, gt_w, snap, clean_only=False, band=0.0, kd=1.0, exclude_sets=()):
         man = [m for m in json.load(open(os.path.join(d, 'manifest.json'))) if m.get('set') not in exclude_sets]
         self.weight, self.gt_w, self.snap, self.clean_only, self.band = weight, gt_w, snap, clean_only, band
         self.audio = [np.load(os.path.join(d, m['audio']), mmap_mode='r') for m in man]
+        self.clean = [np.load(os.path.join(d, m['clean_audio']), mmap_mode='r') if m.get('clean_audio') else None for m in man]
         self.notes = [np.array([n[:3] for n in m['notes']], np.float64).reshape(-1, 3) for m in man]
         self.names = [m['name'] for m in man]
         self.kd = [kd * float(m.get('kd', 1)) for m in man]
@@ -222,24 +228,28 @@ class Source:
         self.hours = dur.sum() / SR / 3600
 
     def sample(self, r):
-        """(clip, notes in the clip, kd weight, may go through a rig, (song, start) of the clip)"""
+        """(clip, notes in the clip, kd weight, may go through a rig, (song, start) of the clip,
+        the same stretch recorded clean or None)"""
         i = r.choice(len(self.audio), p=self.p)
-        a = self.audio[i]
+        a, c = self.audio[i], self.clean[i]
         n = self.notes[i]
-        if len(a) <= CLIP:
-            s = 0
+        L = len(a) if c is None else min(len(a), len(c))
+
+        def crop(arr, s):
             x = np.zeros(CLIP, np.float32)
-            x[:len(a)] = a[:] / 32000
+            seg = np.asarray(arr[s:min(s + CLIP, L)], np.float32) / 32000
+            x[:len(seg)] = seg
+            return x
+        if L <= CLIP:
+            s = 0
+        elif len(n) and r.random() < 0.85:  # mostly where the part plays (song stems are often silent)
+            s = int(np.clip((n[r.integers(len(n)), 0] - r.uniform(0.5, 9.5)) * SR, 0, L - CLIP))
         else:
-            if len(n) and r.random() < 0.85:  # mostly where the part plays (song stems are often silent)
-                s = int(np.clip((n[r.integers(len(n)), 0] - r.uniform(0.5, 9.5)) * SR, 0, len(a) - CLIP))
-            else:
-                s = int(r.integers(0, len(a) - CLIP))
-            x = np.asarray(a[s:s + CLIP], np.float32) / 32000
+            s = int(r.integers(0, L - CLIP))
         t0 = s / SR
         sel = n[(n[:, 1] > t0 - 0.1) & (n[:, 0] < t0 + CLIP / SR + 0.1)].copy()
         sel[:, :2] -= t0
-        return x, sel, self.kd[i], not self.norig[i], (self.groups[i], s)
+        return crop(a, s), sel, self.kd[i], not self.norig[i], (self.groups[i], s), None if c is None else crop(c, s)
 
 
 class Backing:
@@ -279,6 +289,39 @@ def band_mix(g, backing, r, song=None, start=None):
         return g
     b = b * (gr / br) * 10 ** (-r.uniform(-10, 3) / 20)  # guitar from 10 dB under the band to 3 dB over it
     return separate_sim(g, b, r)
+
+
+def make_example(src, r, cabs, backing, clean_p):
+    """(what the original model hears, what the new one hears, notes, label weight, kd weight, snap)"""
+    x, notes, kd_i, may_rig, own, xc = src.sample(r)
+    if xc is not None:  # an amp take: the original model hears its clean recording
+        clean, y = xc, x
+    else:
+        clean = x
+        y = x if (src.clean_only or not may_rig or r.random() < clean_p) else rig(x, r, cabs)
+    if backing and r.random() < src.band:
+        y = band_mix(y, backing, r, *(own if r.random() < 0.8 else (None, None)))
+    y = y * (10 ** (r.uniform(-30, -10) / 20) / (np.sqrt(np.mean(y ** 2)) + 1e-9))
+    return clean.astype(np.float32), y.astype(np.float32), notes, src.gt_w, kd_i, src.snap
+
+
+class Examples(torch.utils.data.IterableDataset):
+    """Endless training examples; each worker process draws from its own random stream."""
+
+    def __init__(self, sources, weights, cabs, backing, clean_p, seed):
+        super().__init__()
+        self.sources, self.weights, self.cabs, self.backing, self.clean_p, self.seed = sources, weights, cabs, backing, clean_p, seed
+
+    def __iter__(self):
+        wi = torch.utils.data.get_worker_info()
+        r = np.random.default_rng([self.seed, wi.id if wi else 0])
+        while True:
+            src = self.sources[r.choice(len(self.sources), p=self.weights)]
+            yield make_example(src, r, self.cabs, self.backing, self.clean_p)
+
+
+def as_list(batch):
+    return batch
 
 
 def gt_targets(notes, teacher_onset=None, snap=False):
@@ -385,6 +428,19 @@ def val_sets(gtechs_dir, gs, cabs, backing=None):
     return sets
 
 
+def egdb_val_sets(d, every=2):
+    """EGDB's validation clips (tools/hrgt_data.py egdb, 196-215; every other one): as recorded,
+    through one of the training amps, and through one of the two amps training never hears."""
+    man = [m for m in json.load(open(os.path.join(d, 'manifest.json'))) if m['set'] == 'egdb_val']
+    by = {(m['group'], m['kind']): m for m in man}
+    clips = sorted({m['group'] for m in man}, key=int)[::every]
+    seen, unseen = ('Ftwin', 'Marshall', 'Mesa'), ('JCjazz', 'Plexi')
+    load = lambda m: (np.load(os.path.join(d, m['audio'])).astype(np.float32) / 32000, m['notes'])
+    return {'egdb_di': [load(by[(c, 'DI')]) for c in clips],
+            'egdb_amp': [load(by[(c, seen[i % 3])]) for i, c in enumerate(clips)],
+            'egdb_unseen': [load(by[(c, unseen[i % 2])]) for i, c in enumerate(clips)]}
+
+
 def load_cabs(path):
     """Cabinet impulse responses (48 kHz) at unit energy: the app's packed assets/sound-cabs-*.bin,
     or a folder of .wav files."""
@@ -443,6 +499,10 @@ def main():
     ap.add_argument('--threads', type=int, default=4)
     ap.add_argument('--bf16', action='store_true')
     ap.add_argument('--no-channels-last', action='store_true')
+    ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    ap.add_argument('--workers', type=int, default=0, help='processes making training clips (0: in the training process)')
+    ap.add_argument('--val-egdb', help='EGDB manifest dir (tools/hrgt_data.py egdb): validate on its validation clips')
+    ap.add_argument('--max-hours', type=float, default=0, help='stop (validating and saving) after this long, e.g. inside a hosted time limit')
     ap.add_argument('--bench', action='store_true')
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
@@ -460,7 +520,7 @@ def main():
         else:
             d, w, gw, snap, *more = spec.split(':')
             w, gw, snap, clean_only, band, kd_w = float(w), float(gw), snap == '1', bool(more) and more[0] == '1', 0.0, 1.0
-        sources.append(Source(d, w, gw, snap, clean_only, band, kd_w, exclude_sets=('P3_music',)))
+        sources.append(Source(d, w, gw, snap, clean_only, band, kd_w, exclude_sets=('P3_music', 'egdb_val', 'egdb_test', 'egdb_unseen_tone')))
         if os.path.basename(os.path.normpath(d)) == 'gtechs':
             gtechs_dir = d
         print(f'data {d}: {len(sources[-1].names)} recordings, {sources[-1].hours:.2f} h, weight {w}, label weight {gw}, snap {snap}'
@@ -475,7 +535,10 @@ def main():
     for p in teacher.parameters():
         p.requires_grad = False
     student = load_model(a.init or a.ckpt)
-    if not a.no_channels_last:  # about 25 % faster convolutions on the processor
+    dev = torch.device(a.device)
+    teacher, student = teacher.to(dev), student.to(dev)
+    print('device', dev, torch.cuda.get_device_name(dev) if dev.type == 'cuda' else f'{a.threads} threads', flush=True)
+    if not a.no_channels_last and dev.type == 'cpu':  # about 25 % faster convolutions on the processor
         teacher = teacher.to(memory_format=torch.channels_last)
         student = student.to(memory_format=torch.channels_last)
     params = setup_student(student)
@@ -483,18 +546,22 @@ def main():
     opt = torch.optim.Adam(params, lr=a.lr)
     step = 0
     last = os.path.join(a.out, 'last.pt')
-    rng = np.random.default_rng(1)
     if os.path.exists(last):
         ck = torch.load(last, map_location='cpu', weights_only=False)
         student.load_state_dict(ck['model'])
         opt.load_state_dict(ck['opt'])
+        for st in opt.state.values():
+            for k, v in st.items():
+                if torch.is_tensor(v):
+                    st[k] = v.to(dev)
         step = ck['step']
-        rng = np.random.default_rng(1000 + step)
         print('resumed at step', step, flush=True)
     sets = val_sets(gtechs_dir, a.gs.split(':', 1) if a.gs else None, cabs, backing) if not a.bench else {}
     for spec in a.val_extra:
         name, d = spec.split('=', 1)
         sets[name] = manifest_set(d)
+    if a.val_egdb and not a.bench:
+        sets.update(egdb_val_sets(a.val_egdb))
     if step == 0 and sets:
         res = validate(teacher, sets)
         print('val original', res, flush=True)
@@ -512,36 +579,42 @@ def main():
         return a.lr * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1, q))))
 
     names = {'onset': 'reg_onset_output', 'offset': 'reg_offset_output', 'frame': 'frame_output', 'velocity': 'velocity_output'}
+    data = Examples(sources, sw, cabs, backing, a.clean_p, 1000 + step if step else 1)
+    if a.workers > 0:
+        data = iter(torch.utils.data.DataLoader(data, batch_size=a.batch, num_workers=a.workers, collate_fn=as_list,
+                                                prefetch_factor=4, persistent_workers=True))
+    else:
+        data = iter(data)
     t_start = time.time()
     while step < a.steps:
+        if a.max_hours and time.time() - t_start > a.max_hours * 3600:
+            print(f'out of time at step {step}', flush=True)
+            a.steps = step
+            if step % a.val_every and sets:
+                res = validate(student, sets)
+                print(f'val step {step}', res, flush=True)
+                torch.save({'model': {k: v.cpu() for k, v in student.state_dict().items()}, 'step': step, 'val': res}, os.path.join(a.out, f'step_{step}.pt'))
+                with open(os.path.join(a.out, 'log.jsonl'), 'a') as f:
+                    f.write(json.dumps({'step': step, 'val': res}) + '\n')
+            break
         tb = time.time()
-        clean, proc, gts, gtw, kdw, snaps = [], [], [], [], [], []
-        for _ in range(a.batch):
-            src = sources[rng.choice(len(sources), p=sw)]
-            x, notes, kd_i, may_rig, own = src.sample(rng)
-            clean.append(x)
-            y = x if (src.clean_only or not may_rig or rng.random() < a.clean_p) else rig(x, rng, cabs)
-            if backing and rng.random() < src.band:
-                y = band_mix(y, backing, rng, *(own if rng.random() < 0.8 else (None, None)))
-            proc.append(y * (10 ** (rng.uniform(-30, -10) / 20) / (np.sqrt(np.mean(y ** 2)) + 1e-9)))
-            gts.append(notes)
-            gtw.append(src.gt_w)
-            kdw.append(kd_i)
-            snaps.append(src.snap)
+        batch = next(data) if a.workers > 0 else [next(data) for _ in range(a.batch)]
+        clean, proc, gts, gtw, kdw, snaps = map(list, zip(*batch))
         t_data = time.time() - tb
         with torch.no_grad():
-            tout = teacher(torch.from_numpy(np.stack(clean)))
-        targets = [gt_targets(n, tout['reg_onset_output'][i].numpy(), s) for i, (n, s) in enumerate(zip(gts, snaps))]
-        g_on = torch.from_numpy(np.stack([t[0] for t in targets]))
-        g_off = torch.from_numpy(np.stack([t[1] for t in targets]))
-        g_fr = torch.from_numpy(np.stack([t[2] for t in targets]))
-        w_gt = torch.tensor(gtw, dtype=torch.float32)
-        w_kd = a.kd * torch.tensor(kdw, dtype=torch.float32)
+            tout = teacher(torch.from_numpy(np.stack(clean)).to(dev))
+        t_on = tout['reg_onset_output'].float().cpu().numpy()
+        targets = [gt_targets(n, t_on[i], s) for i, (n, s) in enumerate(zip(gts, snaps))]
+        g_on = torch.from_numpy(np.stack([t[0] for t in targets])).to(dev)
+        g_off = torch.from_numpy(np.stack([t[1] for t in targets])).to(dev)
+        g_fr = torch.from_numpy(np.stack([t[2] for t in targets])).to(dev)
+        w_gt = torch.tensor(gtw, dtype=torch.float32, device=dev)
+        w_kd = a.kd * torch.tensor(kdw, dtype=torch.float32, device=dev)
         train_mode(student)
         for g in opt.param_groups:
             g['lr'] = lr_at(step)
-        with torch.autocast('cpu', dtype=torch.bfloat16, enabled=a.bf16):
-            out = student(torch.from_numpy(np.stack(proc)))
+        with torch.autocast('cpu', dtype=torch.bfloat16, enabled=a.bf16 and dev.type == 'cpu'):
+            out = student(torch.from_numpy(np.stack(proc)).to(dev))
         out = {k: v.float() for k, v in out.items()}
         kd = (bce(out[names['onset']], tout[names['onset']]) + bce(out[names['offset']], tout[names['offset']]) +
               bce(out[names['frame']], tout[names['frame']]) + bce(out[names['velocity']], tout[names['velocity']], tout[names['onset']]))
@@ -561,12 +634,12 @@ def main():
             print(f'peak memory {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.0f} MB', flush=True)
             return
         if step % 50 == 0 or step == a.steps:
-            torch.save({'model': student.state_dict(), 'opt': opt.state_dict(), 'step': step}, last + '.tmp')
+            torch.save({'model': {k: v.cpu() for k, v in student.state_dict().items()}, 'opt': opt.state_dict(), 'step': step}, last + '.tmp')
             os.replace(last + '.tmp', last)
         if sets and (step % a.val_every == 0 or step == a.steps):
             res = validate(student, sets)
             print(f'val step {step}', res, flush=True)
-            torch.save({'model': student.state_dict(), 'step': step, 'val': res}, os.path.join(a.out, f'step_{step}.pt'))
+            torch.save({'model': {k: v.cpu() for k, v in student.state_dict().items()}, 'step': step, 'val': res}, os.path.join(a.out, f'step_{step}.pt'))
             with open(os.path.join(a.out, 'log.jsonl'), 'a') as f:
                 f.write(json.dumps({'step': step, 'val': res}) + '\n')
 

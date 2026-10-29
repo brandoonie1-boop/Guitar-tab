@@ -22,9 +22,21 @@ of each recording, already shifted to line up with its audio.
   distorted programs are marked to get no rig on top and no distillation), and the rest of each
   song as band backing for training (drums, bass, everything else; no guitars).
 
+  EGDB (Chen et al., ICASSP 2022; the authors' later releases of it are CC BY 4.0): 240 clips of
+  electric guitar through a hexaphonic pickup, each as recorded (direct input) and through five
+  amps (Fender Twin, Roland JC, Marshall, Mesa, Plexi), labels from tools/egdb_json.py. A direct
+  input take is like Guitar-TECHS's (it may go through a rig); an amp take is already coloured or
+  distorted (no rig on top) and is paired with its direct-input take, which the original model
+  hears for distillation (the two line up within about 2 ms). EGDB's own test clips (216 and up)
+  and a validation block (196-215) are kept apart by their 'set', and so are the training clips
+  through JC Jazz and Plexi (EGDB's held-out amps: 'egdb_unseen_tone'), so that validation has
+  amps training never heard. --bias adds the clips as rendered
+  through random BIAS FX2 presets (Zenodo record 12674910, CC BY 4.0) as one more amp take each.
+
 usage: python tools/hrgt_data.py gtechs <Guitar-TECHS dir> <out dir>
        python tools/hrgt_data.py gs-anchor <GuitarSet annotations.json> <audio dir> <out dir>
        python tools/hrgt_data.py slakh <babyslakh_16k dir> <guitar out dir> <backing out dir>
+       python tools/hrgt_data.py egdb <EGDB dir> <egdb.json from tools/egdb_json.py> <out dir> [--bias <EGDB_BIAS_FX2_random dir>]
 """
 import argparse
 import glob
@@ -206,17 +218,60 @@ def slakh(src, gout, bout, label_delay=None):
           '| backing songs', len(os.listdir(bout)))
 
 
+EGDB_TONES = ('DI', 'Ftwin', 'JCjazz', 'Marshall', 'Mesa', 'Plexi')
+
+
+def egdb_split(clip, tone='DI'):
+    """EGDB's own test clips are 216 and up (its README); 196-215 validate here; the rest train,
+    except through EGDB's two held-out amps."""
+    c = int(clip)
+    if c >= 216:
+        return 'egdb_test'
+    if c >= 196:
+        return 'egdb_val'
+    return 'egdb_unseen_tone' if tone in ('JCjazz', 'Plexi') else 'egdb_train'
+
+
+def egdb(src, ann_path, out, bias=None):
+    ann = json.load(open(ann_path))
+    bias_wav = {}
+    if bias:
+        for sub in os.listdir(bias):
+            if os.path.isdir(os.path.join(bias, sub)):
+                for f in os.listdir(os.path.join(bias, sub)):
+                    bias_wav[f.split('.')[0]] = os.path.join(bias, sub, f)
+    os.makedirs(out, exist_ok=True)
+    man = []
+    for clip in sorted(ann, key=int):
+        notes = [[t, t + d, p, 100] for t, d, p, _ in ann[clip]['notes']]
+        for tone in EGDB_TONES + (('BIAS',) if clip in bias_wav else ()):
+            x = load16k(bias_wav[clip] if tone == 'BIAS' else os.path.join(src, f'audio_{tone}', clip + '.wav'))
+            name = f'{clip}_{tone}'
+            np.save(os.path.join(out, name + '.npy'), np.clip(x * 32000, -32767, 32767).astype(np.int16))
+            m = {'name': name, 'source': 'egdb', 'group': clip, 'set': egdb_split(clip, tone), 'take': clip, 'kind': tone,
+                 'audio': name + '.npy', 'dur': round(len(x) / SR, 3), 'notes': notes}
+            if tone != 'DI':
+                m.update({'clean_audio': f'{clip}_DI.npy', 'norig': True})
+            man.append(m)
+    json.dump(man, open(os.path.join(out, 'manifest.json'), 'w'))
+    n = sum(1 for m in man if m['set'] == 'egdb_train')
+    print('clips', len(ann), 'recordings', len(man), 'training recordings', n, 'hours', round(sum(m['dur'] for m in man) / 3600, 2))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('kind', choices=['gtechs', 'gs-anchor', 'slakh'])
+    ap.add_argument('kind', choices=['gtechs', 'gs-anchor', 'slakh', 'egdb'])
     ap.add_argument('src')
     ap.add_argument('rest', nargs='+')
+    ap.add_argument('--bias', help='egdb: the EGDB_BIAS_FX2_random dir, one more amp take per clip')
     ap.add_argument('--label-delay', type=float, default=None, help='slakh: seconds to add to the MIDI times (default: per program, PROGRAM_DELAY)')
     a = ap.parse_args()
     if a.kind == 'gtechs':
         gtechs(a.src, a.rest[0])
     elif a.kind == 'gs-anchor':
         gs_anchor(a.src, a.rest[0], a.rest[1])
+    elif a.kind == 'egdb':
+        egdb(a.src, a.rest[0], a.rest[1], a.bias)
     else:
         slakh(a.src, a.rest[0], a.rest[1], a.label_delay)
 

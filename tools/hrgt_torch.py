@@ -33,7 +33,8 @@ def infer(net, x, batch=4):
     M = (1001 - 1 - fh) // 2  # 250
     for b in range(0, n, batch):
         seg = torch.from_numpy(np.stack([pad[s:s + WIN] for s in starts[b:b + batch]]))
-        od = net(seg)
+        od = net(seg.to(next(net.parameters()).device))
+        od = {k: v.float().cpu() for k, v in od.items()}
         for j, s in enumerate(starts[b:b + batch]):
             k = b + j
             f0 = s // 160
